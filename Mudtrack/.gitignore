@@ -1,0 +1,31 @@
+# Unreal Engine generated data
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+.vs/
+
+# Local builds and downloaded playable releases
+Packaged/
+.game/
+.build_logs/
+
+# Generated IDE files
+*.sln
+*.slnx
+*.VC.db
+*.VC.opendb
+*.user
+
+# Build/debug output
+*.pdb
+*.exp
+*.lib
+*.obj
+
+# Editor backups and local files
+*.blend1
+*.tmp
+*.log
+.DS_Store
+Thumbs.db
