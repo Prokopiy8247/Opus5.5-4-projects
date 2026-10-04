@@ -1,0 +1,56 @@
+# Unity caches and generated files
+**/[Ll]ibrary/
+**/[Tt]emp/
+**/[Oo]bj/
+**/[Bb]uild/
+**/[Bb]uilds/
+**/[Ll]ogs/
+**/[Uu]ser[Ss]ettings/
+**/[Mm]emoryCaptures/
+**/[Rr]ecordings/
+**/[Aa]rtifacts/
+**/[Bb]ackups/
+**/.benchmark_runs/
+**/.downloaded-game/
+**/Assets/Resources/PerformanceTestRun*.json*
+
+# IDE and operating-system files
+**/.vs/
+**/.vsconfig
+**/.idea/
+*.csproj
+*.unityproj
+*.sln
+*.slnx
+*.suo
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.opendb
+*.VC.db
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs, reports, debug symbols, and local backups
+*.log
+*.pdb
+*.mdb
+*.bak
+*.blend1
+sysinfo.txt
+crashlytics-build.properties
+
+# Local credentials and environment files
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+credentials.json
+secrets.*
