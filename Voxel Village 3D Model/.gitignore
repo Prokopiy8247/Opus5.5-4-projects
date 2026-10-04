@@ -1,0 +1,17 @@
+# Blender autosaves and backups
+*.blend1
+*.blend2
+*.blend@
+
+# Generated renders
+renders/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# OS metadata
+.DS_Store
+Thumbs.db
+desktop.ini
+

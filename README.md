@@ -6,3 +6,4 @@
 
 - [Planet Game — Sable Reach](./Planet%20Game/) — бесшовное космическое путешествие между тремя планетами с посадкой на поверхность.
 - [Mudtrack](./Mudtrack/) — off-road игра с физикой полноприводного автомобиля и деформируемым грунтом.
+- [Voxel Village 3D Model — Hollowbrook](./Voxel%20Village%203D%20Model/) — процедурная воксельная деревня для Blender с анимацией и переносимой GLB-моделью.

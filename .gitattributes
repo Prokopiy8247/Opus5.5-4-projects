@@ -9,3 +9,5 @@
 *.cginc text eol=lf
 *.fbx binary
 *.png binary
+*.blend binary
+*.glb binary
