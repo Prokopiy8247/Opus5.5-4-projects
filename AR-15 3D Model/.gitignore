@@ -1,0 +1,22 @@
+*.blend1
+*.blend2
+*.tmp
+*.bak
+__pycache__/
+.DS_Store
+Thumbs.db
+
+# Local research, backups, benchmarks, and automation helpers
+References/
+_backup/
+.benchmark_runs/
+tools/
+
+# Local environment and credential files
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
