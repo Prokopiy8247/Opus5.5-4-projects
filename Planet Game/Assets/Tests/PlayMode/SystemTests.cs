@@ -85,15 +85,29 @@ namespace PG.Tests
             Assert.AreEqual(1, Object.FindObjectsByType<AudioListener>(FindObjectsSortMode.None).Count(a => a.isActiveAndEnabled));
             Assert.AreEqual(1, Object.FindObjectsByType<StarBody>(FindObjectsSortMode.None).Length, "Helion is drawn");
             Assert.AreEqual(1, Object.FindObjectsByType<Starfield>(FindObjectsSortMode.None).Length);
+            var deep = Object.FindAnyObjectByType<DeepSky>();
+            Assert.IsNotNull(deep, "Milky Way, nebulae and galaxies are drawn");
+            if (SystemInfo.graphicsDeviceType != UnityEngine.Rendering.GraphicsDeviceType.Null)
+                Assert.IsTrue(deep.SkyCube != null && deep.SkyCube.IsCreated(), "deep-sky cubemap baked");
+            Assert.Greater(deep.Galaxies.Count, 100, "distant galaxies");
             var ws = WorldStreamer.Instance;
             Assert.IsNotNull(ws.TerrainMaterial); Assert.IsNotNull(ws.WaterMaterial);
             Assert.IsNotNull(ws.AtmosphereMaterial); Assert.IsNotNull(ws.CloudMaterial);
+            Assert.IsNotNull(ws.GasGiantMaterial);
             var ship = ShipController.Instance;
             foreach (var r in ship.GetComponentsInChildren<Renderer>(true))
                 foreach (var m in r.sharedMaterials) Assert.IsNotNull(m, "missing material on " + r.name);
             Assert.Greater(ship.GetComponentsInChildren<MeshFilter>().Length, 10, "the imported Blender ship, not a placeholder");
             Assert.IsNotNull(ship.gearAnimator);
-            foreach (var b in ws.system.Planets) Assert.IsNotNull(ws.RuntimeOf(b), b.id + " runtime");
+            foreach (var b in ws.system.Planets)
+            {
+                if (b.kind == BodyKind.GasGiant)
+                {
+                    Assert.IsNotNull(ws.GasGiantOf(b), b.id + " gas volume");
+                    Assert.IsNull(ws.RuntimeOf(b), b.id + " has no ground to stream");
+                }
+                else Assert.IsNotNull(ws.RuntimeOf(b), b.id + " runtime");
+            }
 #if UNITY_EDITOR
             var scenes = UnityEditor.EditorBuildSettings.scenes.Where(s => s.enabled).Select(s => s.path).ToArray();
             CollectionAssert.AreEqual(new[] { PGTestUtil.GameScene }, scenes, "exactly one startup scene in the build");

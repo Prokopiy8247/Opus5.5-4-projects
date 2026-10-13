@@ -7,7 +7,7 @@ using UnityEngine;
 namespace PG.EditorTools
 {
     /// <summary>
-    /// Windows release build of the single startup scene.
+    /// Windows Development Build of the single startup scene.
     ///   Unity.exe -batchmode -quit -projectPath . -executeMethod PG.EditorTools.PGPlayerBuild.BuildWindows
     /// </summary>
     public static class PGPlayerBuild
@@ -15,7 +15,7 @@ namespace PG.EditorTools
         const string OutDir  = "Build/Windows";
         const string ExeName = "SableReach.exe";
 
-        [MenuItem("Tools/PG/Build Windows Player (Release)", priority = 40)]
+        [MenuItem("Tools/PG/Build Windows Player (Development)", priority = 40)]
         public static void BuildWindows()
         {
             string outDir = Path.Combine(Directory.GetCurrentDirectory(), OutDir);
@@ -38,7 +38,7 @@ namespace PG.EditorTools
                 scenes = new[] { PGBootstrap.ScenePath },
                 locationPathName = Path.Combine(outDir, ExeName),
                 target = BuildTarget.StandaloneWindows64,
-                options = BuildOptions.None
+                options = BuildOptions.Development
             };
 
             var report = BuildPipeline.BuildPlayer(opts);
@@ -54,7 +54,7 @@ namespace PG.EditorTools
             }
             Debug.Log(msg);
             File.WriteAllText(Path.Combine(outDir, "HOW_TO_RUN.txt"),
-                "Sable Reach - seamless planetary exploration (Windows x64)\r\n\r\n" +
+                "Sable Reach - seamless planetary exploration (Windows Development Build)\r\n\r\n" +
                 "Run " + ExeName + ". The mouse is captured; Esc releases it, a click captures it again.\r\n" +
                 "Press F1 in game for the full key list. See README_RUN.md in the project folder.\r\n");
         }

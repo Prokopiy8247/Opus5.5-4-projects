@@ -150,6 +150,184 @@ namespace PG.Tests
             Assert.Greater(vLocal.z, 10f, "forward thrust must move the ship along +Z");
         }
 
+        /// <summary>
+        /// Vharos has no surface: flown at full throttle through its centre, the
+        /// ship enters the haze, is slowed and buffeted in the cloud decks, and
+        /// comes out of the far side - no ground contact, no damage, no relocation.
+        /// </summary>
+        [UnityTest, Timeout(300000)]
+        public IEnumerator GasGiant_FlyStraightThroughTheCentre_ComesOutTheOtherSide()
+        {
+            yield return PGTestUtil.LoadGame();
+            var gm = GameManager.Instance; var ship = gm.ship;
+            var gas = gm.system.Get("vharos");
+            Assert.IsNotNull(gas); Assert.IsFalse(gas.landable);
+            PGTestUtil.ClearInputs(ship);
+            gm.DebugJumpToGasGiant("vharos");
+            int tp0 = ShipController.TeleportCount;
+            yield return PGTestUtil.Fixed(5);
+
+            DVec3 entrySide = (ship.LogicalPosition - gas.LogicalPos).normalized;
+            DVec3 exitPoint = gas.LogicalPos - entrySide * (gas.radius + gas.atmosphereHeight + 3000.0);
+            double outer = gas.radius + gas.atmosphereHeight;
+            float hull0 = ship.HullIntegrity;
+            bool wasInside = false, cappedInDeck = true;
+            float maxBuffet = 0f;
+            double minR = double.MaxValue;
+
+            Time.timeScale = 4f;
+            ship.inThrottle = 1f; ship.boost = true;
+            float start = Time.time;
+            while (Time.time - start < 240f)
+            {
+                // Hold the nose on the far-side exit point (the buffeting pushes it around).
+                Vector3 to = Quaternion.Inverse(ship.Orientation) * (exitPoint - ship.LogicalPosition).normalized.ToVector3();
+                ship.inYaw = Mathf.Clamp(to.x * 4f, -1f, 1f);
+                ship.inPitch = Mathf.Clamp(to.y * 4f, -1f, 1f);
+
+                double r = (ship.LogicalPosition - gas.LogicalPos).magnitude;
+                minR = System.Math.Min(minR, r);
+                if (ship.GasBody == gas) wasInside = true;
+                if (ship.GasDepth >= 1f && ship.Speed > PGConst.SpeedGasMax + 80f && r < gas.radius - 1500.0) cappedInDeck = false;
+                maxBuffet = Mathf.Max(maxBuffet, ship.Buffet);
+                if (wasInside && r > outer + 500.0 && DVec3.Dot(ship.LogicalPosition - gas.LogicalPos, entrySide) < 0.0) break;
+                yield return new WaitForFixedUpdate();
+            }
+            Time.timeScale = 1f;
+            PGTestUtil.ClearInputs(ship);
+
+            double rEnd = (ship.LogicalPosition - gas.LogicalPos).magnitude;
+            Debug.Log($"[TEST] Vharos fly-through: deepest {minR:F0} m from centre, exit r {rEnd:F0} m, max buffet {maxBuffet:F2}, hull {ship.HullIntegrity:P0}, {Time.time - start:F0} s");
+            Assert.IsTrue(wasInside, "the ship must have been inside the gas");
+            Assert.Less(minR, gas.radius * 0.25, "the straight line goes through the core - nothing solid stops it");
+            Assert.Greater(rEnd, outer, "out of the haze again");
+            Assert.Less(DVec3.Dot((ship.LogicalPosition - gas.LogicalPos).normalized, entrySide), -0.5, "out on the FAR side");
+            Assert.IsTrue(cappedInDeck, "the thick gas holds the speed near the deck cap");
+            Assert.Greater(maxBuffet, 0.3f, "the cloud decks buffet the ship");
+            Assert.AreEqual(hull0, ship.HullIntegrity, 1e-4f, "flying through gas does no damage");
+            Assert.AreEqual(tp0, ShipController.TeleportCount, "continuous flight, no relocation");
+            Assert.IsFalse(ship.Landed);
+        }
+
+        /// <summary>Debug-places the ship <paramref name="agl"/> metres over Mirvalis, falling at <paramref name="sink"/> m/s with the assist off.</summary>
+        static IEnumerator DropOntoMirvalis(GameManager gm, double agl, double sink)
+        {
+            var ship = gm.ship;
+            PGTestUtil.ClearInputs(ship);
+            gm.DebugJumpToSurface("mirvalis", 1);
+            yield return PGTestUtil.Fixed(5);
+            DVec3 up = (ship.LogicalPosition - ship.SoiBody.LogicalPos).normalized;
+            ship.flightAssist = false;
+            ship.TeleportLogical(ship.LogicalPosition - up * (ship.AltitudeAGL - agl), -up * sink);
+        }
+
+        [UnityTest]
+        public IEnumerator PlanetImpact_AboveExplodeSpeed_DestroysTheShip_ThenRespawnsAboveTheCrashSite()
+        {
+            yield return PGTestUtil.LoadGame();
+            var gm = GameManager.Instance; var ship = gm.ship;
+            yield return DropOntoMirvalis(gm, 300.0, 150.0);
+            int tp0 = ShipController.TeleportCount;
+            var body = ship.SoiBody;
+            bool heard = false;
+            ship.Exploded += () => heard = true;
+
+            int guard = 0;
+            while (!ship.Destroyed && guard++ < 600) yield return new WaitForFixedUpdate();
+            Assert.IsTrue(ship.Destroyed, "hitting the ground at 150 m/s must destroy the ship");
+            Debug.Log($"[TEST] planet impact: {ship.DestroyedReason}, impact {ship.LastImpactSpeed:F0} m/s");
+            Assert.IsTrue(heard, "the Exploded event fires (audio)");
+            Assert.Greater(ship.LastImpactSpeed, PGConst.ExplodeSpeed);
+            StringAssert.Contains(body.displayName.ToUpperInvariant(), ship.DestroyedReason);
+            Assert.IsFalse(ship.DestroyedByStar);
+            Assert.AreEqual(0f, ship.HullIntegrity);
+            foreach (var r in ship.GetComponentsInChildren<MeshRenderer>()) Assert.IsFalse(r.enabled, "the hull is gone: " + r.name);
+            Assert.IsNotNull(ship.GetComponentInChildren<ShipExplosion>(), "the explosion effect is on the wreck");
+
+            // The wreck does not move and does not answer the controls.
+            DVec3 wreck = ship.LogicalPosition;
+            ship.inThrottle = 1f; ship.inLift = 1f;
+            yield return PGTestUtil.Fixed(60);
+            Assert.IsTrue(ship.Destroyed);
+            Assert.Less((ship.LogicalPosition - wreck).magnitude, 0.01, "the wreck stays put");
+            Assert.AreEqual("DESTROYED", ship.ModeLabel);
+
+            guard = 0;
+            while (ship.Destroyed && guard++ < 600) yield return new WaitForFixedUpdate();
+            yield return PGTestUtil.Fixed(5);
+            Assert.IsFalse(ship.Destroyed, "a new ship arrives after the respawn delay");
+            Assert.AreEqual(1f, ship.HullIntegrity);
+            Assert.IsFalse(ship.MotorDisabled);
+            Assert.AreEqual(0f, ship.inThrottle, "the new ship starts with the throttle closed");
+            Assert.AreEqual(body, ship.SoiBody);
+            Assert.Greater(ship.AltitudeDatum, body.atmosphereHeight, "respawned in space above the planet");
+            Assert.Greater(DVec3.Dot((ship.LogicalPosition - body.LogicalPos).normalized, (wreck - body.LogicalPos).normalized), 0.999, "above the crash site");
+            foreach (var r in ship.GetComponentsInChildren<MeshRenderer>()) Assert.IsTrue(r.enabled, "the new ship is visible: " + r.name);
+            Assert.AreEqual(tp0, ShipController.TeleportCount, "a respawn is not a debug teleport");
+        }
+
+        [UnityTest]
+        public IEnumerator PlanetImpact_BelowExplodeSpeed_DamagesTheHull_ButDoesNotDestroy()
+        {
+            yield return PGTestUtil.LoadGame();
+            var gm = GameManager.Instance; var ship = gm.ship;
+            yield return DropOntoMirvalis(gm, 30.0, 34.0);
+
+            int guard = 0;
+            while (ship.LastImpactSpeed <= 0f && !ship.Destroyed && guard++ < 600) yield return new WaitForFixedUpdate();
+            yield return PGTestUtil.Fixed(30);
+            Debug.Log($"[TEST] hard landing: {ship.LastImpactNote}, hull {ship.HullIntegrity:P0}");
+            Assert.That(ship.LastImpactSpeed, Is.InRange(PGConst.CrashSpeed, PGConst.ExplodeSpeed));
+            Assert.IsFalse(ship.Destroyed, "a hard landing below the explode speed is survivable");
+            Assert.That(ship.HullIntegrity, Is.InRange(0.3f, 0.99f), "but it damages the hull");
+        }
+
+        [UnityTest]
+        public IEnumerator Star_HeatsTheHull_ThenDestroysTheShip_AndRespawnsOnTheStartOrbit()
+        {
+            yield return PGTestUtil.LoadGame();
+            var gm = GameManager.Instance; var ship = gm.ship;
+            var star = gm.system.Star;
+            PGTestUtil.ClearInputs(ship);
+
+            // Just outside the heat zone, nose on the star's centre.
+            DVec3 dir = (ship.LogicalPosition - star.LogicalPos).normalized;
+            Vector3 fwd = (-dir).ToVector3();
+            ship.Orientation = Quaternion.LookRotation(fwd, Vector3.Cross(fwd, Vector3.right).normalized);
+            ship.TeleportLogical(star.LogicalPos + dir * (star.radius + PGConst.StarHeatMargin + 400.0), DVec3.zero);
+            int tp0 = ShipController.TeleportCount;
+            yield return PGTestUtil.Fixed(5);
+            Assert.IsFalse(ship.StarWarning);
+            Assert.AreEqual(1f, ship.HullIntegrity);
+
+            ship.inThrottle = 0.25f;
+            bool warned = false;
+            float hullWhileWarned = 1f;
+            int guard = 0;
+            while (!ship.Destroyed && guard++ < 1800)
+            {
+                if (ship.StarWarning) { warned = true; hullWhileWarned = ship.HullIntegrity; }
+                yield return new WaitForFixedUpdate();
+            }
+            Debug.Log($"[TEST] star: {ship.DestroyedReason}, hull before the end {hullWhileWarned:P0}, {guard} steps");
+            Assert.IsTrue(warned, "the heat zone warns before it kills");
+            Assert.Less(hullWhileWarned, 0.95f, "the hull heats on the way in");
+            Assert.IsTrue(ship.Destroyed, "flying into the star must destroy the ship");
+            Assert.IsTrue(ship.DestroyedByStar);
+            StringAssert.Contains(star.displayName.ToUpperInvariant(), ship.DestroyedReason);
+            Assert.IsFalse(ship.StarWarning);
+
+            guard = 0;
+            while (ship.Destroyed && guard++ < 600) yield return new WaitForFixedUpdate();
+            yield return PGTestUtil.Fixed(5);
+            Assert.IsFalse(ship.Destroyed);
+            Assert.AreEqual(1f, ship.HullIntegrity);
+            Assert.Greater((ship.LogicalPosition - star.LogicalPos).magnitude, star.radius + PGConst.StarPulseMargin, "the new ship is clear of the star");
+            Assert.AreEqual(gm.system.Get(gm.startBodyId), ship.SoiBody, "back on the start orbit");
+            Assert.IsFalse(ship.StarWarning);
+            Assert.AreEqual(tp0, ShipController.TeleportCount);
+        }
+
         [UnityTest]
         public IEnumerator NormalTravel_HasNoTeleport_NoSceneLoad_AndPhysicallyBoundedSteps()
         {

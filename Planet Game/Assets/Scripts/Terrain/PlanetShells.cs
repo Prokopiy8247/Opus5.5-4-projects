@@ -95,6 +95,15 @@ namespace PG
                 m.SetFloat("_AtmoRadius", (float)AtmosphereRadius);
                 m.SetFloat("_HazeDensity", (float)(b.fogDensity * 0.45));
                 Water = MakeShell("Water_" + b.displayName, m, (float)WaterRadius);
+
+                // An island's flank drops ~150 m almost straight down; without
+                // absorption it shows through the shell as a wall round every island.
+                if (b.islandSize > 0.0)
+                {
+                    TerrainMaterial.SetFloat("_SeaRadius", (float)WaterRadius);
+                    TerrainMaterial.SetColor("_WaterColor", b.waterColor * 0.7f);
+                    TerrainMaterial.SetFloat("_WaterAbsorb", 0.1f);
+                }
             }
 
             if (b.atmosphereHeight > 1.0)
@@ -128,7 +137,8 @@ namespace PG
             }
         }
 
-        static Material Instance(Material template, string shaderName, string name)
+        /// <summary>Per-body material: a copy of the scene template, or of the named shader if none is wired.</summary>
+        public static Material Instance(Material template, string shaderName, string name)
         {
             Material m;
             if (template != null) m = new Material(template);

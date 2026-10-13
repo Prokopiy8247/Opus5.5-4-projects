@@ -14,6 +14,7 @@ namespace PG
             FloatingOrigin.ResetInstance();
             WorldStreamer.ResetInstance();
             ShipController.ResetInstance();
+            PlayerCharacter.ResetInstance();
             CameraRig.ResetInstance();
             GameManager.ResetInstance();
             BeaconRegistry.ResetInstance();

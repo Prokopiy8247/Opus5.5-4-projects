@@ -15,6 +15,9 @@ Shader "PG/Terrain"
         _HazeDensity  ("Haze Density", Float) = 0.0002
         _AmbientSky   ("Sky Ambient", Float) = 0.30
         _SpecAmount   ("Specular", Range(0,1)) = 0.04
+        _SeaRadius    ("Sea Radius (0 = no absorption)", Float) = 0
+        _WaterColor   ("Deep Water Colour", Color) = (0.03,0.12,0.26,1)
+        _WaterAbsorb  ("Water Absorption (1/m)", Float) = 0.1
     }
     SubShader
     {
@@ -40,6 +43,9 @@ Shader "PG/Terrain"
             float  _HazeDensity;
             float  _AmbientSky;
             float  _SpecAmount;
+            float  _SeaRadius;
+            float4 _WaterColor;
+            float  _WaterAbsorb;
 
             struct appdata
             {
@@ -99,15 +105,31 @@ Shader "PG/Terrain"
                 float3 H = normalize(L + V);
                 col += _PG_SunColor.rgb * pow(saturate(dot(n, H)), 48.0) * _SpecAmount * ndl;
 
-                // Aerial haze: the length of the view ray that lies inside this
-                // planet's atmosphere. From orbit it thickens toward the limb;
-                // inside the air it is ordinary distance haze. One function for
-                // both, so the transition is continuous.
                 float3 ro = _WorldSpaceCameraPos - _PlanetCenter.xyz;
                 float3 rel = i.wpos - _PlanetCenter.xyz;
                 float3 rd = rel - ro;
                 float dist = length(rd);
                 rd /= max(dist, 1e-3);
+
+                // Water absorption (_SeaRadius 0 = off): the sea floor fades to
+                // the water's own colour with the length of the view ray that
+                // lies under the sea sphere. Per pixel, so a steep island flank
+                // sinks out of sight instead of showing through the water shell
+                // as a streaked wall.
+                float seaDepth = _SeaRadius - length(i.lpos);
+                if (_SeaRadius > 0.0 && seaDepth > 0.0)
+                {
+                    float2 ts = PG_RaySphere(ro, rd, _SeaRadius);
+                    float wet = max(dist - max(ts.x, 0.0), seaDepth);
+                    float3 seaSky = _AtmoColor.rgb * (0.08 + 0.92 * day) * _PG_SunColor.rgb * 0.75 + _PG_Ambient.rgb;
+                    float3 seaCol = _WaterColor.rgb * (_PG_SunColor.rgb * saturate(dot(up, L)) * 0.55 + seaSky * 0.45 + _PG_Ambient.rgb);
+                    col = lerp(col, seaCol, 1.0 - exp(-wet * _WaterAbsorb));
+                }
+
+                // Aerial haze: the length of the view ray that lies inside this
+                // planet's atmosphere. From orbit it thickens toward the limb;
+                // inside the air it is ordinary distance haze. One function for
+                // both, so the transition is continuous.
                 float2 ta = PG_RaySphere(ro, rd, _AtmoRadius);
                 float path = max(min(dist, ta.y) - max(ta.x, 0.0), 0.0);
                 float haze = 1.0 - exp(-path * _HazeDensity);

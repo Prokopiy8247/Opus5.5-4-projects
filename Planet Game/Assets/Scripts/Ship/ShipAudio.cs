@@ -6,7 +6,7 @@ namespace PG
     /// Ship sound, synthesised at start-up (original audio, no downloaded or
     /// third-party assets): engine hum that follows thrust, a boost layer,
     /// atmospheric wind/entry roar, a pulse-drive tone, and one-shots for
-    /// touchdown, lift-off and UI feedback.
+    /// touchdown, lift-off, the ship's explosion and UI feedback.
     /// </summary>
     public class ShipAudio : MonoBehaviour
     {
@@ -14,7 +14,7 @@ namespace PG
         public AtmosphereSystem atmosphere;
 
         AudioSource engine, wind, pulse, oneShot;
-        AudioClip thump, blip, warn;
+        AudioClip thump, blip, warn, boom;
         float warnCooldown;
         bool lastWarn;
 
@@ -32,10 +32,12 @@ namespace PG
             thump = BuildThump();
             blip = BuildBlip(880f, 0.07f);
             warn = BuildBlip(560f, 0.16f);
+            boom = BuildBoom();
             if (ship != null)
             {
                 ship.Touchdown += () => oneShot.PlayOneShot(thump, 0.9f);
                 ship.LiftOff += () => oneShot.PlayOneShot(blip, 0.5f);
+                ship.Exploded += () => oneShot.PlayOneShot(boom, 1f);
             }
         }
 
@@ -56,6 +58,13 @@ namespace PG
         void Update()
         {
             if (ship == null || engine == null) return;
+            if (ship.Destroyed)
+            {
+                // Nothing left to make a noise; the explosion one-shot rings out.
+                engine.volume = wind.volume = pulse.volume = 0f;
+                lastWarn = false;
+                return;
+            }
             float load = ship.MotorDisabled ? 0.05f : ship.ThrustLoad;
             bool landed = ship.Landed;
             engine.pitch = Mathf.Lerp(0.70f, 1.45f, load) * (ship.boost ? 1.12f : 1f);
@@ -152,6 +161,27 @@ namespace PG
                 d[i] = (float)((System.Math.Sin(t * f * System.Math.PI * 2.0) * 0.8 + (rnd.NextDouble() * 2 - 1) * 0.25 * System.Math.Exp(-t * 30.0)) * env);
             }
             var c = AudioClip.Create("PG_Touchdown", len, 1, Rate, false);
+            c.SetData(d, 0);
+            return c;
+        }
+
+        static AudioClip BuildBoom()
+        {
+            int len = (int)(Rate * 2.2);
+            var d = new float[len];
+            var rnd = new System.Random(1313);
+            double lp = 0.0;
+            for (int i = 0; i < len; i++)
+            {
+                double t = (double)i / Rate;
+                // Sharp crack, then a rumble whose filter closes as it fades.
+                double n = rnd.NextDouble() * 2.0 - 1.0;
+                lp += (n - lp) * (0.02 + 0.5 * System.Math.Exp(-t * 9.0));
+                double env = System.Math.Min(1.0, t * 400.0) * System.Math.Exp(-t * 2.4);
+                double sub = System.Math.Sin(t * (58.0 - 16.0 * t) * System.Math.PI * 2.0) * System.Math.Exp(-t * 3.5);
+                d[i] = Mathf.Clamp((float)((lp * 2.6 + sub * 0.7) * env), -1f, 1f);
+            }
+            var c = AudioClip.Create("PG_Explosion", len, 1, Rate, false);
             c.SetData(d, 0);
             return c;
         }

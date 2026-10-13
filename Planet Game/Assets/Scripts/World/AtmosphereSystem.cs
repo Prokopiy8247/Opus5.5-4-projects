@@ -40,6 +40,22 @@ namespace PG
             var body = streamer.CurrentBody;
             DVec3 camPos = rig != null ? rig.LogicalPosition : ship.LogicalPosition;
 
+            // Inside a gas giant: the gas itself is drawn by PG/GasGiant; here
+            // only the light on the ship, the fading stars and the entry glow.
+            var gas = streamer.GasGiantAt(camPos, out float gasDepth);
+            if (gas != null)
+            {
+                AirDensity = gasDepth; Dayness = 1f;
+                float g = gasDepth * gasDepth * (3f - 2f * gasDepth);
+                lighting.curAmbientTop = Color.Lerp(SpaceTop, gas.atmosphereColor * 0.22f, g);
+                lighting.curAmbientBottom = Color.Lerp(SpaceBot, gas.fogColor * 0.30f, g);
+                lighting.curFogDensity = 0.004f * g;     // ~10% haze on the hull at chase distance
+                lighting.curFogColor = gas.atmosphereColor * 0.35f;
+                lighting.curStarFade = 1f - g;
+                UpdatePlasma(Mathf.Clamp01(ship.GasDepth * 1.6f) * Mathf.Clamp01((ship.Speed - 200f) / 300f));
+                return;
+            }
+
             if (body == null || !body.landable || body.atmosphereHeight < 1.0)
             {
                 AirDensity = 0f; EntryHeat = 0f; Dayness = 1f;

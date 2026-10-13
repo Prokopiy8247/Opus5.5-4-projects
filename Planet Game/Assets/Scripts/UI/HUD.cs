@@ -152,13 +152,17 @@ namespace PG
             H = 1080f;
 
             var cam = rig != null ? rig.cam : Camera.main;
-            if (cam != null && !showMap) DrawWorldMarkers(cam);
+            if (game != null && game.OnFoot) DrawOnFoot(cam);
+            else
+            {
+                if (cam != null && !showMap) DrawWorldMarkers(cam);
 
-            DrawFlightPanel();
-            DrawTargetBlock();
-            DrawBottomBars();
-            DrawStatusLeft();
-            DrawWarnings();
+                DrawFlightPanel();
+                DrawTargetBlock();
+                DrawBottomBars();
+                DrawStatusLeft();
+                DrawWarnings();
+            }
             if (!showMap) DrawMiniMap();
             if (showMap) DrawSystemMap();
             if (showHelp) DrawHelp();
@@ -350,10 +354,49 @@ namespace PG
             switch (b.kind)
             {
                 case BodyKind.Rocky: return new Color(0.95f, 0.55f, 0.32f);
-                case BodyKind.Ocean: return new Color(0.40f, 0.75f, 1f);
+                case BodyKind.Ocean: return b.islandSize > 0.0 ? new Color(0.25f, 0.88f, 0.92f) : new Color(0.40f, 0.75f, 1f);
                 case BodyKind.Ice: return new Color(0.80f, 0.92f, 1f);
+                case BodyKind.GasGiant: return new Color(0.92f, 0.72f, 0.46f);
                 case BodyKind.Star: return new Color(1f, 0.85f, 0.45f);
                 default: return Color.white;
+            }
+        }
+
+        // ------------------------------------------------------------ on foot
+
+        void DrawOnFoot(Camera cam)
+        {
+            var pc = game.character;
+            var body = pc.Body;
+            double dist = pc.DistanceToShip;
+
+            if (cam != null && !showMap)
+            {
+                Img(dot, new Vector2(W * 0.5f, H * 0.5f), 5f, new Color(1f, 1f, 1f, 0.7f));
+                // The way back: the ship is always marked.
+                Vector3 shipR = ship.transform.position + ship.transform.up * 2.5f;
+                if (Project(cam, shipR, out var p, out var local))
+                {
+                    if (dist > 14.0)
+                    {
+                        Img(ring, p, 18f, cTarget);
+                        Text(new Rect(p.x - 100, p.y + 12, 200, 20), "SHIP  " + Km(dist), sCenterSmall);
+                    }
+                }
+                else EdgeArrow(local, "SHIP  " + Km(dist), cTarget);
+            }
+
+            Fill(new Rect(14, 14, 372, 114), cPanel);
+            Text(new Rect(26, 18, 340, 30), body.displayName.ToUpperInvariant(), sBig);
+            string state = pc.Swimming ? "SWIMMING" : !pc.Grounded ? "AIRBORNE" : pc.Speed > pc.walkSpeed + 0.5f ? "RUNNING" : pc.Speed > 0.3f ? "WALKING" : "STANDING";
+            Text(new Rect(26, 50, 340, 22), "ON FOOT  <b>" + state + "</b>    " + pc.Speed.ToString("F1") + " m/s", sLabel);
+            Text(new Rect(26, 72, 340, 22), "GRAV " + body.gravity.ToString("F1") + " m/s²    SHIP <b>" + Km(dist) + "</b>", sLabel);
+            Text(new Rect(26, 96, 340, 20), "WASD walk  Shift run  Space jump  C view  F1 controls", sSmall);
+
+            if (pc.CanBoard)
+            {
+                Fill(new Rect(W * 0.5f - 150, H - 150, 300, 34), cPanel);
+                Text(new Rect(W * 0.5f - 150, H - 150, 300, 34), "<b>E</b>  board the ship", sCenter);
             }
         }
 
@@ -363,7 +406,8 @@ namespace PG
         {
             var body = ship.SoiBody;
             Fill(new Rect(14, 14, 372, 158), cPanel);
-            string place = body == null ? "DEEP SPACE"
+            string place = ship.GasBody != null ? "INSIDE " + ship.GasBody.displayName.ToUpperInvariant()
+                         : body == null ? "DEEP SPACE"
                          : ship.AltitudeDatum < body.atmosphereHeight ? body.displayName.ToUpperInvariant()
                          : "NEAR " + body.displayName.ToUpperInvariant();
             Text(new Rect(26, 18, 300, 30), place, sBig);
@@ -372,7 +416,10 @@ namespace PG
             Text(new Rect(26, 50, 300, 22), "ALT  <b>" + alt + "</b>    V/S " + ship.VerticalSpeed.ToString("+0;-0") + " m/s", sLabel);
             Text(new Rect(26, 72, 300, 22), "SPD  <b>" + ship.Speed.ToString("N0") + " m/s</b>    SET " + (set * 100f).ToString("F0") + "%", sLabel);
             Text(new Rect(26, 94, 356, 22), "MODE <b>" + ship.ModeLabel + "</b>   ASSIST " + (ship.flightAssist ? "ON" : "<color=#ffb070>OFF</color>"), sLabel);
-            Text(new Rect(26, 116, 300, 22), "GRAV " + ship.CurrentGravity.ToString("F1") + " m/s²    AIR " + (ship.AirDensity * 100f).ToString("F0") + "%", sLabel);
+            if (ship.GasBody != null)
+                Text(new Rect(26, 116, 356, 22), "GAS " + (ship.GasDepth * 100f).ToString("F0") + "%    TURBULENCE " + (ship.Buffet * 100f).ToString("F0") + "%", sLabel);
+            else
+                Text(new Rect(26, 116, 300, 22), "GRAV " + ship.CurrentGravity.ToString("F1") + " m/s²    AIR " + (ship.AirDensity * 100f).ToString("F0") + "%", sLabel);
             Text(new Rect(26, 140, 300, 20), "F1 controls   M map   F3 telemetry", sSmall);
         }
 
@@ -432,7 +479,7 @@ namespace PG
                 + (ship.GearDown ? "DOWN" : "UP") + "</b>    CAM " + (rig != null ? rig.view.ToString().ToUpperInvariant() : "-"), sLabel);
             string ls = ship.LandStatus;
             if (!string.IsNullOrEmpty(ls))
-                Text(new Rect(26, y + 30, 400, 22), ls, ls.Contains("CANNOT") || ls.Contains("TOO") || ls.Contains("UNSAFE") || ls.Contains("CRITICAL") ? sWarnLeft : sOk);
+                Text(new Rect(26, y + 30, 400, 22), ls, ls.Contains("CANNOT") || ls.Contains("TOO") || ls.Contains("UNSAFE") || ls.Contains("DESTROYED") ? sWarnLeft : sOk);
             if (!string.IsNullOrEmpty(landingLine))
                 Text(new Rect(26, y + 52, 400, 22), landingLine, landingOk ? sOk : sWarnLeft);
             if (!string.IsNullOrEmpty(ship.LastImpactNote))
@@ -451,6 +498,7 @@ namespace PG
 
         void DrawWarnings()
         {
+            if (ship.Destroyed) { DrawDestroyed(); return; }
             string msg = null;
             if (ship.StarWarning) msg = "STAR PROXIMITY - HULL HEATING - TURN AWAY";
             else if (ship.CollisionWarning && !(ship.PulseEngaged && ship.TimeToImpact > 2.5f))
@@ -459,6 +507,16 @@ namespace PG
             float a = 0.55f + 0.35f * Mathf.Sin(Time.unscaledTime * 10f);
             Fill(new Rect(W * 0.5f - 300, 74, 600, 34), new Color(0.45f, 0.06f, 0.03f, a));
             Text(new Rect(W * 0.5f - 300, 74, 600, 34), msg, sWarn);
+        }
+
+        void DrawDestroyed()
+        {
+            float cx = W * 0.5f, cy = H * 0.5f - 120;
+            int left = Mathf.Max(0, Mathf.CeilToInt(PGConst.RespawnDelay - ship.DestroyedSeconds));
+            Fill(new Rect(cx - 340, cy, 680, 92), new Color(0.45f, 0.06f, 0.03f, 0.8f));
+            Text(new Rect(cx - 340, cy + 6, 680, 34), "<size=26>SHIP DESTROYED</size>", sWarn);
+            Text(new Rect(cx - 340, cy + 38, 680, 24), ship.DestroyedReason, sCenter);
+            Text(new Rect(cx - 340, cy + 62, 680, 24), "NEW SHIP IN " + left + " s", sCenterSmall);
         }
 
         // --------------------------------------------------------------- maps
@@ -504,7 +562,7 @@ namespace PG
             foreach (var b in system.bodies)
             {
                 Vector2 p = P(b.LogicalPos);
-                float size = b.kind == BodyKind.Star ? (big ? 26f : 12f) : Mathf.Max(big ? 12f : 7f, (float)b.radius * k * 2f);
+                float size = Mathf.Max(b.kind == BodyKind.Star ? (big ? 26f : 12f) : (big ? 12f : 7f), (float)b.radius * k * 2f);
                 Img(dot, p, size, BodyTint(b));
                 if (b == tb) Img(ring, p, size + 12f, cTarget);
                 double d = (b.LogicalPos - ship.LogicalPosition).magnitude - b.radius;
@@ -571,7 +629,7 @@ namespace PG
 
         void DrawTestMenu()
         {
-            float pw = 470, ph = 360;
+            float pw = 470, ph = 392;
             float x = W * 0.5f - pw * 0.5f, y = H * 0.5f - ph * 0.5f;
             Fill(new Rect(x, y, pw, ph), new Color(0.03f, 0.04f, 0.08f, 0.94f));
             GUILayout.BeginArea(new Rect(x + 16, y + 12, pw - 32, ph - 24));
@@ -584,7 +642,9 @@ namespace PG
             if (GUILayout.Button("Tarn-Veth")) game.DebugJumpToSurface("tarnveth", 0);
             if (GUILayout.Button("Mirvalis")) game.DebugJumpToSurface("mirvalis", 1);
             if (GUILayout.Button("Kryosyne")) game.DebugJumpToSurface("kryosyne", 2);
+            if (GUILayout.Button("Pelagia")) game.DebugJumpToSurface("pelagia", 0);
             GUILayout.EndHorizontal();
+            if (GUILayout.Button("DEBUG TELEPORT: approach the gas giant Vharos")) game.DebugJumpToGasGiant("vharos");
             GUILayout.BeginHorizontal();
             if (GUILayout.Button("Mirvalis A")) game.DebugJumpToSurface("mirvalis", 0);
             if (GUILayout.Button("B")) game.DebugJumpToSurface("mirvalis", 1);

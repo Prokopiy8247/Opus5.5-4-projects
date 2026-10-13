@@ -22,6 +22,9 @@ namespace PG
         /// <summary>When false the reader leaves the ship's control fields alone (tests, route pilot).</summary>
         public bool acceptInput = true;
 
+        /// <summary>Set while the pilot walks outside (PlayerCharacter): the ship's controls rest and the mouse looks around instead.</summary>
+        public bool onFoot;
+
         [Header("Feel")]
         public float mouseSensitivity = 0.045f;
         public float stickRecentre = 0.55f;
@@ -31,6 +34,8 @@ namespace PG
 
         public float throttle;
         public Vector2 Stick { get; private set; }
+        /// <summary>This frame's mouse motion, cursor-warp frames removed.</summary>
+        public Vector2 MouseDelta { get; private set; }
 
         // Diagnostics for the OS-level input test (read and reset by the
         // -pgTelemetry probe): raw mouse axis summed since the last sample,
@@ -57,6 +62,8 @@ namespace PG
             { "J",              "Pulse drive on/off (nose on target)" },
             { "L",              "Assisted landing (below 900 m)" },
             { "K",              "Take off" },
+            { "E (landed)",     "Leave the ship / board it again" },
+            { "On foot",        "WASD walk, Shift run, Space jump, C view" },
             { "M",              "System map" },
             { "C",              "Camera: external / cockpit" },
             { "V",              "Flight assist on / off" },
@@ -99,6 +106,7 @@ namespace PG
 
             Vector2 rawMouse = new Vector2(Input.GetAxisRaw("Mouse X"), Input.GetAxisRaw("Mouse Y"));
             if (ignoreMouseFrames > 0) { ignoreMouseFrames--; rawMouse = Vector2.zero; }
+            MouseDelta = new Vector2(rawMouse.x, rawMouse.y * (invertY ? -1f : 1f));
             RawMouseSinceProbe += rawMouse;
             if (rawMouse.sqrMagnitude > 1e-8f) MouseFramesSinceProbe++;
 
@@ -142,6 +150,16 @@ namespace PG
             Vector2 s = stick.magnitude < stickDeadzone ? Vector2.zero : stick;
 
             if (typing) return;
+
+            if (onFoot)
+            {
+                // Nobody is at the controls: the parked ship gets no input at all.
+                Stick = Vector2.zero;
+                throttle = 0f;
+                ship.inThrottle = ship.inYaw = ship.inPitch = ship.inRoll = ship.inLift = 0f;
+                ship.brake = ship.boost = false;
+                return;
+            }
 
             // ---------- throttle set point ---------------------------------------
             float t = 0f;

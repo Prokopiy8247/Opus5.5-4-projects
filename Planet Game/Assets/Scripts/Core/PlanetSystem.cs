@@ -5,8 +5,9 @@ using UnityEngine;
 namespace PG
 {
     /// <summary>
-    /// The one star system this game is about: a star plus three fully landable
-    /// planets. Distances are compressed gameplay distances, not astronomy.
+    /// The one star system this game is about: a star, four fully landable
+    /// planets and a gas giant you can fly through. Distances are compressed
+    /// gameplay distances, not astronomy.
     ///
     /// Everything here is authored in logical metres. The star sits at the
     /// origin of logical space, which is also the initial floating-origin shift.
@@ -61,15 +62,20 @@ namespace PG
 
         /// <summary>
         /// Authored system layout (compressed gameplay scale):
-        ///   Helion, radius 3.5 km, at the origin;
+        ///   Helion, radius 10.5 km, at the origin;
         ///   three planets (radius 3.2-4.0 km) on a ~30 km ring, 120 degrees
         ///   apart, so every planet-to-planet line is ~52 km long and passes
-        ///   ~15 km from the star's centre (11 km clear of its surface). At the
+        ///   ~15 km from the star's centre (4.5 km clear of its surface; see
+        ///   PGConst.StarPulseMargin for departures from a sunward side). At the
         ///   pulse drive's 1250 m/s a hop takes ~35-45 s including spool-up and
         ///   the slow-down before the target's atmosphere.
         ///   Relief is kept under ~10% of the radius and the visible air is
         ///   concentrated near the ground, so each planet reads as one solid
         ///   sphere with a thin glowing limb from space.
+        ///   Two outer bodies sit off the ring plane (Pelagia 20 km below,
+        ///   Vharos 20 km above), placed so every line between any two bodies
+        ///   still passes >= 15 km from the star's centre and the inner routes
+        ///   pass >= 38 km from the gas giant's centre.
         /// </summary>
         public void BuildDefaultSystem()
         {
@@ -82,7 +88,7 @@ namespace PG
                 displayName = "Helion",
                 kind = BodyKind.Star,
                 logicalPosF = new Vector3(0f, 0f, 0f),
-                radius = 3500.0,
+                radius = 10500.0,
                 seed = 7,
                 landable = false,
                 gravity = 0.0,
@@ -217,6 +223,74 @@ namespace PG
                 gravity = 7.40,
                 poiName = "Emberglass Rift",
                 poiDesc = "A thermal rift where the ice sheet has failed; obsidian shards and steam vents."
+            });
+
+            // ---- 4. Pelagia: a global ocean with only small scattered islands. --
+            bodies.Add(new BodyDef
+            {
+                id = "pelagia",
+                displayName = "Pelagia",
+                kind = BodyKind.Ocean,
+                logicalPosF = new Vector3(-35355f, -20000f, -35355f),
+                radius = 3600.0,
+                seed = 271828,
+                continentAmp = 45.0,          // gentle swell of the ocean floor
+                mountainAmp  = 35.0,          // hills on the larger islands
+                detailAmp    = 6.0,
+                continentSize = 3000.0,
+                mountainSize  = 260.0,
+                detailSize    = 48.0,
+                octaves = 5,
+                warpAmount = 0.5,
+                ridgedMountains = true,
+                islandSize = 520.0,
+                islandThreshold = 0.26,
+                islandHeight = 40.0,
+                oceanFloorDepth = 150.0,
+                lowColor  = new Color(0.30f, 0.46f, 0.22f),
+                midColor  = new Color(0.36f, 0.50f, 0.25f),
+                highColor = new Color(0.50f, 0.48f, 0.40f),
+                waterColor = new Color(0.02f, 0.17f, 0.30f),
+                seaLevel = 0.0,
+                snowLine = 1e9,
+                vegetation = 0.95,
+                atmosphereHeight = 1500.0,
+                skyOpticalDepth = 0.58,
+                atmosphereColor = new Color(0.32f, 0.62f, 1.0f),
+                sunsetColor = new Color(1.0f, 0.56f, 0.30f),
+                cloudColor = new Color(1f, 1f, 1f),
+                fogColor = new Color(0.55f, 0.74f, 0.96f),
+                fogDensity = 0.00048,
+                cloudCover = 0.46,
+                cloudHeight = 520.0,
+                ambient = 0.12,
+                dayNightTilt = 0.10,
+                gravity = 9.20,
+                poiName = "Tidebell Atoll",
+                poiDesc = "A lone atoll ringed by helical basalt columns; in a strong wind they hum like bells."
+            });
+
+            // ---- 5. Vharos: banded gas giant, no surface - fly straight through. --
+            bodies.Add(new BodyDef
+            {
+                id = "vharos",
+                displayName = "Vharos",
+                kind = BodyKind.GasGiant,
+                logicalPosF = new Vector3(37282f, 20000f, -44431f),
+                radius = 8500.0,              // cloud deck
+                seed = 314159,
+                lowColor  = new Color(0.86f, 0.74f, 0.55f),   // pale cream zones
+                midColor  = new Color(0.68f, 0.44f, 0.26f),   // ochre belts
+                highColor = new Color(0.42f, 0.24f, 0.17f),   // dark rust belts
+                cloudColor = new Color(0.86f, 0.30f, 0.16f),  // the great storm
+                atmosphereColor = new Color(0.95f, 0.78f, 0.52f),  // haze / limb
+                fogColor = new Color(0.55f, 0.20f, 0.10f),    // the hot, dim depths
+                seaLevel = -1e9,
+                atmosphereHeight = 1800.0,    // haze above the cloud deck
+                landable = false,
+                gravity = 0.0,
+                poiName = "The Quiet Core",
+                poiDesc = "At the very centre the storms cancel out: a still, glowing calm inside the giant."
             });
         }
 

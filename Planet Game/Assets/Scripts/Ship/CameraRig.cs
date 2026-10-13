@@ -24,6 +24,8 @@ namespace PG
         public ShipController ship;
         public WorldStreamer streamer;
         public AtmosphereSystem atmosphere;
+        /// <summary>The pilot on foot; while they walk, the camera follows them instead of the ship.</summary>
+        public PlayerCharacter character;
 
         public View view = View.External;
 
@@ -38,9 +40,17 @@ namespace PG
         [Header("Cockpit")]
         public Vector3 cockpitFallback = new Vector3(0f, 1.3f, 3.2f);
 
+        [Header("On foot")]
+        public float footDistance = 4.6f;
+        public float footFov = 66f;
+        public float blendTime = 0.6f;
+
         Quaternion smoothRot;
         bool init;
         float shakeT;
+        float blend = 1f;
+        Vector3 blendFromPos;
+        Quaternion blendFromRot;
 
         /// <summary>Camera's logical position, published for lighting and HUD.</summary>
         public DVec3 LogicalPosition { get; private set; }
@@ -58,6 +68,8 @@ namespace PG
             var fo = FloatingOrigin.Instance;
             if (fo == null) return;
             float dt = Time.deltaTime;
+
+            if (character != null && character.OnFoot) { FootCamera(fo, dt); return; }
 
             Vector3 shipPos = ship.transform.position;
             Quaternion shipRot = ship.transform.rotation;
@@ -102,8 +114,10 @@ namespace PG
 
             // Engine / entry vibration: small, smooth, scaled by what the ship is doing.
             float heat = atmosphere != null ? atmosphere.EntryHeat : 0f;
-            float amp = ship.ThrustLoad * 0.02f + (ship.boost ? 0.03f : 0f) + (ship.PulseEngaged ? 0.05f : 0f) + heat * 0.18f;
+            float amp = ship.ThrustLoad * 0.02f + (ship.boost ? 0.03f : 0f) + (ship.PulseEngaged ? 0.05f : 0f) + heat * 0.18f
+                      + ship.Buffet * 0.35f;
             if (view == View.Cockpit) amp *= 0.5f;
+            amp += ship.Blast * 1.6f;
             shakeT += dt * 23f;
             pos += rot * new Vector3((Mathf.PerlinNoise(shakeT, 0.3f) - 0.5f) * amp,
                                      (Mathf.PerlinNoise(0.7f, shakeT) - 0.5f) * amp, 0f);
@@ -112,8 +126,58 @@ namespace PG
             float wantFov = (view == View.Cockpit ? cockpitFov : baseFov) + Mathf.Clamp01(speed / PGConst.SpeedPulse) * 10f;
             cam.fieldOfView = Mathf.Lerp(cam.fieldOfView, wantFov, 1f - Mathf.Exp(-3f * dt));
 
+            Blend(ref pos, ref rot, dt);
             transform.SetPositionAndRotation(pos, rot);
             LogicalPosition = fo.ToLogical(pos);
+        }
+
+        /// <summary>
+        /// On foot: the mouse looks around freely. Third person orbits the
+        /// character's head, first person sits at eye height.
+        /// </summary>
+        void FootCamera(FloatingOrigin fo, float dt)
+        {
+            Vector3 up = character.Up;
+            Vector3 look = character.LookDirection;
+            Vector3 eye = character.transform.position + up * character.eyeHeight;
+            Quaternion rot = Quaternion.LookRotation(look, up);
+            Vector3 pos = eye;
+
+            if (character.firstPerson) cam.nearClipPlane = 0.05f;
+            else
+            {
+                pos = eye + up * 0.35f + Vector3.Cross(up, look).normalized * 0.55f - look * footDistance;
+                // Looking up swings the camera down behind the character: keep it above the ground.
+                DVec3 camLogical = fo.ToLogical(pos);
+                double agl = streamer != null ? streamer.AltitudeAboveGround(character.Body, camLogical) : 1.0;
+                if (agl < 0.5) pos += (camLogical - character.Body.LogicalPos).normalized.ToVector3() * (float)(0.5 - agl);
+                cam.nearClipPlane = 0.15f;
+            }
+
+            cam.farClipPlane = 400000f;
+            cam.fieldOfView = Mathf.Lerp(cam.fieldOfView, footFov, 1f - Mathf.Exp(-3f * dt));
+
+            Blend(ref pos, ref rot, dt);
+            transform.SetPositionAndRotation(pos, rot);
+            LogicalPosition = fo.ToLogical(pos);
+        }
+
+        /// <summary>Glide from the current pose to the new subject (stepping out of / into the ship) instead of cutting.</summary>
+        public void BeginBlend()
+        {
+            blendFromPos = transform.position;
+            blendFromRot = transform.rotation;
+            blend = 0f;
+            if (ship != null) smoothRot = ship.transform.rotation;
+        }
+
+        void Blend(ref Vector3 pos, ref Quaternion rot, float dt)
+        {
+            if (blend >= 1f) return;
+            blend = Mathf.Min(1f, blend + dt / Mathf.Max(blendTime, 0.01f));
+            float k = blend * blend * (3f - 2f * blend);
+            pos = Vector3.Lerp(blendFromPos, pos, k);
+            rot = Quaternion.Slerp(blendFromRot, rot, k);
         }
 
         public void CycleView()
@@ -125,6 +189,7 @@ namespace PG
         public void SnapImmediate()
         {
             init = false;
+            blend = 1f;
             if (ship != null) smoothRot = ship.transform.rotation;
             LateUpdate();
         }

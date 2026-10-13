@@ -71,7 +71,7 @@ namespace PG.EditorTools
 
         public class Mats
         {
-            public Material terrain, water, atmo, clouds, sun, corona, stars, exhaust, plasma;
+            public Material terrain, water, atmo, clouds, gasGiant, sun, corona, stars, deepSky, galaxy, blackHole, exhaust, plasma;
             public Material hull, accent, dark, glass, glow;
             public Material prop, crystal, landmark, beacon, discovery;
             public Material screen, flora, poiSandstone, poiBasalt, poiObsidian, poiEmber;
@@ -104,9 +104,13 @@ namespace PG.EditorTools
             m.water   = MakeMat("PG_Water", "PG/Water", null);
             m.atmo    = MakeMat("PG_Atmosphere", "PG/Atmosphere", mt => F(mt, "_Intensity", 1.25f));
             m.clouds  = MakeMat("PG_Clouds", "PG/Clouds", null);
+            m.gasGiant = MakeMat("PG_GasGiant", "PG/GasGiant", null);
             m.sun     = MakeMat("PG_Sun", "PG/Sun", mt => { C(mt, "_Color", new Color(1f, 0.84f, 0.60f)); F(mt, "_Intensity", 7f); });
             m.corona  = MakeMat("PG_Corona", "PG/Glow", mt => { C(mt, "_Color", new Color(1f, 0.72f, 0.42f)); F(mt, "_Intensity", 1.3f); F(mt, "_Falloff", 3.4f); });
             m.stars   = MakeMat("PG_Stars", "PG/Stars", mt => F(mt, "_Brightness", 1.7f));
+            m.deepSky = MakeMat("PG_DeepSky", "PG/DeepSky", mt => F(mt, "_Intensity", 1f));
+            m.galaxy  = MakeMat("PG_Galaxy", "PG/Galaxy", mt => F(mt, "_Intensity", 1f));
+            m.blackHole = MakeMat("PG_BlackHole", "PG/BlackHole", null);
             m.exhaust = MakeMat("PG_Exhaust", "PG/Glow", mt => { C(mt, "_Color", new Color(0.55f, 0.80f, 1f)); F(mt, "_Intensity", 1.6f); F(mt, "_Falloff", 1.7f); });
             m.plasma  = MakeMat("PG_Plasma", "PG/Glow", mt => { C(mt, "_Color", new Color(1f, 0.62f, 0.32f)); F(mt, "_Intensity", 1.5f); F(mt, "_Falloff", 1.9f); });
 
@@ -539,6 +543,7 @@ namespace PG.EditorTools
             streamer.WaterMaterial = mats.water;
             streamer.AtmosphereMaterial = mats.atmo;
             streamer.CloudMaterial = mats.clouds;
+            streamer.GasGiantMaterial = mats.gasGiant;
 
             var beacons = root.AddComponent<BeaconRegistry>();
             beacons.BeaconMaterial = mats.beacon;
@@ -587,6 +592,12 @@ namespace PG.EditorTools
             star.system = system;
             star.SunMaterial = mats.sun;
             star.CoronaMaterial = mats.corona;
+
+            var deep = new GameObject("DeepSky").AddComponent<DeepSky>();
+            deep.bakeShader = Shader.Find("Hidden/PG/DeepSkyBake");
+            deep.skyMaterial = mats.deepSky;
+            deep.galaxyMaterial = mats.galaxy;
+            deep.blackHoleMaterial = mats.blackHole;
 
             var sf = new GameObject("Starfield").AddComponent<Starfield>();
             sf.StarMaterial = mats.stars;
@@ -693,6 +704,8 @@ namespace PG.EditorTools
             R("ships", UnityEngine.Object.FindObjectsByType<ShipController>(FindObjectsSortMode.None).Length);
             R("cameras", UnityEngine.Object.FindObjectsByType<Camera>(FindObjectsSortMode.None).Length);
             R("huds", UnityEngine.Object.FindObjectsByType<HUD>(FindObjectsSortMode.None).Length);
+            var ds = UnityEngine.Object.FindAnyObjectByType<DeepSky>();
+            R("deep_sky", ds == null ? "MISSING" : "bake " + (ds.bakeShader != null) + " sky " + (ds.skyMaterial != null) + " galaxies " + (ds.galaxyMaterial != null) + " black hole " + (ds.blackHoleMaterial != null));
             R("flora_fields", UnityEngine.Object.FindObjectsByType<FloraField>(FindObjectsSortMode.None).Length);
             R("audio_listeners", UnityEngine.Object.FindObjectsByType<AudioListener>(FindObjectsSortMode.None).Length);
 
@@ -724,7 +737,7 @@ namespace PG.EditorTools
                 R("ship_triangles", tris);
             }
             var ws = UnityEngine.Object.FindAnyObjectByType<WorldStreamer>();
-            R("streamer_materials", ws != null && ws.TerrainMaterial && ws.WaterMaterial && ws.AtmosphereMaterial && ws.CloudMaterial);
+            R("streamer_materials", ws != null && ws.TerrainMaterial && ws.WaterMaterial && ws.AtmosphereMaterial && ws.CloudMaterial && ws.GasGiantMaterial);
             Debug.Log(sb.ToString());
         }
     }

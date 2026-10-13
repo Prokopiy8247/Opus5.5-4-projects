@@ -71,21 +71,28 @@ namespace PG
                 dir.z + w3 * wamp).normalized;
 
             double cont = Fbm(perm, wd.x * fC, wd.y * fC, wd.z * fC, b.octaves, 2.05, 0.5);
-
-            // Mountains only grow out of the raised parts of the landmass field.
-            double mask = PGNoise.SmoothStep(-0.05, 0.45, cont);
-
-            double mount;
-            if (b.ridgedMountains)
-                mount = RidgedFbm(perm, wd.x * fM, wd.y * fM, wd.z * fM, 4, 2.11, 0.5) * mask;
-            else
-                mount = Fbm(perm, wd.x * fM, wd.y * fM, wd.z * fM, 4, 2.07, 0.5) * mask * 1.6;
-
             double det = Fbm(perm, dir.x * fD, dir.y * fD, dir.z * fD, 3, 2.31, 0.55);
 
-            double h = cont * b.continentAmp
-                     + mount * b.mountainAmp * (b.ridgedMountains ? 0.55 : 0.42)
-                     + det * b.detailAmp;
+            double h;
+            if (b.islandSize > 0.0)
+            {
+                h = IslandElevation(b, perm, wd, cont, det, fM);
+            }
+            else
+            {
+                // Mountains only grow out of the raised parts of the landmass field.
+                double mask = PGNoise.SmoothStep(-0.05, 0.45, cont);
+
+                double mount;
+                if (b.ridgedMountains)
+                    mount = RidgedFbm(perm, wd.x * fM, wd.y * fM, wd.z * fM, 4, 2.11, 0.5) * mask;
+                else
+                    mount = Fbm(perm, wd.x * fM, wd.y * fM, wd.z * fM, 4, 2.07, 0.5) * mask * 1.6;
+
+                h = cont * b.continentAmp
+                  + mount * b.mountainAmp * (b.ridgedMountains ? 0.55 : 0.42)
+                  + det * b.detailAmp;
+            }
 
             // ---- signature geology. Every term is continuous in dir, so the
             //      features are identical from orbit and at the landing site. ---
@@ -119,6 +126,44 @@ namespace PG
                 h -= 13.0 * crack * b.crackDensity;
             }
             return h;
+        }
+
+        /// <summary>
+        /// Archipelago world: an ocean floor everywhere, with islands only where
+        /// a mid-frequency field rises over a high threshold. Thresholding keeps
+        /// them small, separate blobs instead of joining into continents; the
+        /// continent field only nudges the threshold, so islands cluster into
+        /// archipelagos with open ocean between them.
+        ///
+        /// The waterline sits exactly on the threshold, where both sides of the
+        /// profile are level: a beach that rises gently inland to a rounded top,
+        /// and a shallow shelf that falls away to the ocean floor.
+        /// </summary>
+        static double IslandElevation(BodyDef b, int[] perm, DVec3 wd, double cont, double det, double fM)
+        {
+            double fI = b.radius / b.islandSize;
+            double n = Fbm(perm, wd.x * fI + 53.1, wd.y * fI - 21.7, wd.z * fI + 9.4, 4, 2.1, 0.5)
+                     + cont * 0.30;
+            double s = n - b.islandThreshold;   // > 0 land, < 0 sea
+
+            double h;
+            if (s >= 0.0)
+            {
+                double land = PGNoise.SmoothStep(0.0, 0.25, s);   // 0 waterline .. 1 island core
+                h = b.seaLevel + b.islandHeight * land;
+                // Hills only inland, so they never raise new land out of the sea.
+                if (land > 1e-3)
+                    h += (RidgedFbm(perm, wd.x * fM, wd.y * fM, wd.z * fM, 4, 2.11, 0.5) * 0.5 + 0.5) * b.mountainAmp * land * land;
+            }
+            else
+            {
+                double deep = PGNoise.SmoothStep(0.0, 0.12, -s);   // 0 waterline .. 1 open ocean
+                h = b.seaLevel + (cont * b.continentAmp - b.oceanFloorDepth) * deep;
+            }
+
+            // Fine relief fades out at the waterline, or it would fray every
+            // beach into specks of land and puddles.
+            return h + det * b.detailAmp * PGNoise.SmoothStep(0.0, 0.06, Math.Abs(s));
         }
 
         /// <summary>0..1 strength of the volcanic-field mask at a direction (0 outside fields).</summary>
@@ -200,8 +245,10 @@ namespace PG
             if (hasSea && height < b.seaLevel)
             {
                 // Shallow shelf lightens, the deep stays dark. This is what shows
-                // through the translucent water shell near the coast.
-                float d = (float)PGNoise.Clamp01((b.seaLevel - height) / 160.0);
+                // through the translucent water shell near the coast. An island
+                // drops straight into deep water, so its flank goes dark quickly
+                // and only the lagoon rim stays turquoise.
+                float d = (float)PGNoise.Clamp01((b.seaLevel - height) / (b.islandSize > 0.0 ? 30.0 : 160.0));
                 Color shallow = b.kind == BodyKind.Ice ? new Color(0.55f, 0.72f, 0.80f) : new Color(0.20f, 0.55f, 0.58f);
                 return LerpC(shallow, b.waterColor * 0.5f, Mathf.Sqrt(d));
             }
@@ -328,17 +375,40 @@ namespace PG
         /// flat sea floor, and a landmark, a beacon or a landing site must never
         /// end up on it - the flattest spot is not the right spot.
         ///
-        /// Falls back to the flattest spot of any kind if the body has no water
-        /// or nowhere dry can be found nearby.
+        /// On an archipelago the open sea can be wider than the search radius,
+        /// and the nearest islet may be nothing but cliffs; then the search
+        /// moves out to the nearest ground a ship can land on and settles there.
+        ///
+        /// Falls back to the flattest spot of any kind if the body has no water,
+        /// and to the best it saw nearby if nothing landable is within reach.
         /// </summary>
         public static DVec3 FindFlatSpotOnLand(BodyDef b, int[] perm, DVec3 prefer, double tolMetres, int tries)
         {
             bool hasSea = b.seaLevel > -1e8;
             if (!hasSea) return FindFlatSpot(b, perm, prefer, tolMetres, tries);
 
-            DVec3 best = prefer.normalized;
+            DVec3 best = FlattestDryNear(b, perm, prefer.normalized, tolMetres, tries, false, out bool foundDry);
+            if (foundDry && SlopeDegrees(b, perm, best) < PGConst.MaxLandingSlope) return best;
+            if (!NearestDry(b, perm, prefer.normalized, PGConst.MaxLandingSlope * 0.6, out DVec3 ground)) return best;
+            return FlattestDryNear(b, perm, ground, Math.Min(tolMetres, 150.0), tries, true, out _);
+        }
+
+        static double SlopeDegrees(BodyDef b, int[] perm, DVec3 dir)
+        {
+            return Math.Acos(Math.Min(1.0, DVec3.Dot(SurfaceNormal(b, perm, dir, 6.0), dir))) * 180.0 / Math.PI;
+        }
+
+        /// <summary>
+        /// Random search around <paramref name="centre"/> for the flattest dry
+        /// candidate. <paramref name="centreIsDry"/> lets the centre itself stand
+        /// as the answer when no candidate beats it.
+        /// </summary>
+        static DVec3 FlattestDryNear(BodyDef b, int[] perm, DVec3 centre, double tolMetres, int tries, bool centreIsDry, out bool foundDry)
+        {
+            DVec3 best = centre;
             double bestSlope = double.MaxValue;
-            bool foundDry = false;
+            foundDry = centreIsDry;
+            if (centreIsDry) bestSlope = 1.0 - DVec3.Dot(SurfaceNormal(b, perm, centre, 6.0), centre);
             uint s = 987654u;
 
             for (int i = 0; i < tries; i++)
@@ -349,7 +419,7 @@ namespace PG
                 double a2 = (s % 10000) / 10000.0 * 2.0 - 1.0;
 
                 double spread = Math.Min(0.9, tolMetres / b.radius);
-                DVec3 anchor = foundDry ? best : prefer.normalized;
+                DVec3 anchor = foundDry ? best : centre;
                 DVec3 cand = (anchor + new DVec3(a1 * spread, a2 * spread, (a1 + a2) * spread * 0.5)).normalized;
 
                 double h = Elevation(b, perm, cand);
@@ -366,6 +436,32 @@ namespace PG
             }
 
             return best;
+        }
+
+        /// <summary>
+        /// Closest dry ground under a slope limit to a direction: a golden-angle
+        /// spiral outwards at ~40 m spacing, so the first hit is (nearly) the
+        /// nearest. Reaches ~3 km.
+        /// </summary>
+        static bool NearestDry(BodyDef b, int[] perm, DVec3 centre, double maxSlopeDegrees, out DVec3 dry)
+        {
+            DVec3 t1 = DVec3.Cross(centre, new DVec3(0, 1, 0));
+            if (t1.sqrMagnitude < 1e-6) t1 = DVec3.Cross(centre, new DVec3(1, 0, 0));
+            t1 = t1.normalized;
+            DVec3 t2 = DVec3.Cross(centre, t1).normalized;
+
+            const double Spacing = 40.0;
+            for (int k = 1; k <= 20000; k++)
+            {
+                double theta = Spacing * Math.Sqrt(k / Math.PI) / b.radius;
+                if (theta > Math.PI) break;
+                double ang = k * 2.399963;
+                DVec3 d = (centre * Math.Cos(theta) + (t1 * Math.Cos(ang) + t2 * Math.Sin(ang)) * Math.Sin(theta)).normalized;
+                if (Elevation(b, perm, d) < b.seaLevel + 8.0) continue;
+                if (SlopeDegrees(b, perm, d) < maxSlopeDegrees) { dry = d; return true; }
+            }
+            dry = centre;
+            return false;
         }
 
         /// <summary>Great-circle angular distance in radians between two directions.</summary>

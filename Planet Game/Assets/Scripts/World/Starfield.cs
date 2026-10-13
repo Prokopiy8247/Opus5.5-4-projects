@@ -43,8 +43,8 @@ namespace PG
             var uv2 = new Vector2[n * 4];
             var tris = new int[n * 6];
 
-            // A tilted galactic band holds ~45% of the stars.
-            Vector3 bandNormal = new Vector3(0.31f, 0.92f, -0.24f).normalized;
+            // The galactic band (the Milky Way of DeepSky) holds ~45% of the stars.
+            Vector3 bandNormal = GalacticFrame.Pole;
             Vector2[] corners = { new Vector2(-1, -1), new Vector2(1, -1), new Vector2(-1, 1), new Vector2(1, 1) };
 
             for (int i = 0; i < n; i++)

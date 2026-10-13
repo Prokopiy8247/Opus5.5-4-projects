@@ -31,6 +31,12 @@ namespace PG
         public AtmosphereSystem atmosphere;
         public PGGlobalLighting lighting;
         public HUD hud;
+        /// <summary>The pilot on foot. Created here at start; not part of the scene.</summary>
+        public PlayerCharacter character;
+
+        /// <summary>Where the player is: on foot or in the ship.</summary>
+        public bool OnFoot => character != null && character.OnFoot;
+        public DVec3 PlayerLogical => OnFoot ? character.LogicalPosition : ship.LogicalPosition;
 
         [Header("Start state")]
         public string startBodyId = "mirvalis";
@@ -99,7 +105,8 @@ namespace PG
                 if (props != null) props.Build();
                 PlaceShipAtStart();
             }
-            if (rig != null) rig.SnapImmediate();
+            if (character == null) character = PlayerCharacter.Create(ship, streamer, input, rig);
+            if (rig != null) { rig.character = character; rig.SnapImmediate(); }
 
             Cursor.lockState = CursorLockMode.Locked;
             Cursor.visible = false;
@@ -210,20 +217,58 @@ namespace PG
             ship.LandStatus = "";
         }
 
+        /// <summary>
+        /// A new ship after the old one blew up: in space above the crash site,
+        /// level with the horizon, or back on the start orbit if it was lost to
+        /// the star. The target is kept. Not counted as a teleport.
+        /// </summary>
+        public void RespawnShip()
+        {
+            var b = ship.SoiBody;
+            var target = streamer.TargetBody;
+            if (ship.DestroyedByStar || b == null || !b.landable)
+            {
+                PlaceShipAtStart();
+                if (target != null) streamer.SetTarget(target);
+            }
+            else
+            {
+                DVec3 dir = (ship.LogicalPosition - b.LogicalPos).normalized;
+                Vector3 up = dir.ToVector3();
+                Vector3 fwd = Vector3.ProjectOnPlane(ship.Orientation * Vector3.forward, up);
+                if (fwd.sqrMagnitude < 0.01f) fwd = Vector3.Cross(up, Vector3.right);
+                if (fwd.sqrMagnitude < 0.01f) fwd = Vector3.Cross(up, Vector3.forward);
+                ship.Respawn(b.LogicalPos + dir * (b.radius + b.atmosphereHeight + 1500.0), Quaternion.LookRotation(fwd.normalized, up));
+            }
+            if (input != null) input.ResetThrottle();
+            ship.inThrottle = 0f;
+            if (rig != null) rig.SnapImmediate();
+            Toast("New ship ready - " + (ship.SoiBody != null ? "above " + ship.SoiBody.displayName : "in space"));
+        }
+
         void Update()
         {
             if (FloatingOrigin.Instance == null || ship == null || streamer == null) return;
-            DVec3 travelDir = ship.LogicalVelocity.sqrMagnitude > 1e-6
-                ? ship.LogicalVelocity.normalized
-                : DVec3.From(ship.Orientation * Vector3.forward);
+            if (ship.Destroyed && ship.DestroyedSeconds >= PGConst.RespawnDelay) RespawnShip();
+            // The world streams around the player, who may be walking away from the ship.
+            bool onFoot = OnFoot;
+            DVec3 velocity = onFoot ? character.LogicalVelocity : ship.LogicalVelocity;
+            DVec3 travelDir = velocity.sqrMagnitude > 1e-6
+                ? velocity.normalized
+                : DVec3.From(onFoot ? character.Heading : ship.Orientation * Vector3.forward);
+            DVec3 player = PlayerLogical;
 
-            streamer.Tick(ship.LogicalPosition, travelDir, ship.Speed, Time.deltaTime);
-            FloatingOrigin.Instance.Tick(ship.LogicalPosition);
+            streamer.Tick(player, travelDir, onFoot ? character.Speed : ship.Speed, Time.deltaTime);
+            FloatingOrigin.Instance.Tick(player);
 
             bool keys = input == null || input.acceptInput;
             if (keys)
             {
-                if (Input.GetKeyDown(KeyCode.F5)) { save.Save(); Toast(save.LastStatus); }
+                if (Input.GetKeyDown(KeyCode.F5))
+                {
+                    if (ship.Destroyed) Toast("Cannot save - ship destroyed");
+                    else { save.Save(); Toast(save.LastStatus); }
+                }
                 if (Input.GetKeyDown(KeyCode.F9)) { save.Load(); Toast(save.LastStatus); }
                 if (Input.GetKeyDown(KeyCode.B)) DropBeacon();
                 if (Input.GetKeyDown(KeyCode.N)) TargetNearestBeacon();
@@ -255,8 +300,8 @@ namespace PG
 
         public BeaconRegistry.Beacon DropBeacon()
         {
-            var body = ship.SoiBody;
-            var b = beacons.Add("Beacon " + (beacons.Count + 1), body, ship.LogicalPosition, "beacon",
+            var body = ship.GasBody ?? ship.SoiBody;   // inside a gas giant it hangs in the gas
+            var b = beacons.Add("Beacon " + (beacons.Count + 1), body, PlayerLogical, "beacon",
                                 body != null ? body.displayName : "space");
             Toast("Beacon dropped: " + b.label + (body != null ? " on " + body.displayName : ""));
             if (hud != null) hud.Blip();
@@ -265,7 +310,7 @@ namespace PG
 
         public void TargetNearestBeacon()
         {
-            var near = beacons.Nearest(ship.LogicalPosition);
+            var near = beacons.Nearest(PlayerLogical);
             if (near == null) { Toast("No beacons placed yet (B)"); return; }
             var body = system.Get(near.bodyId);
             if (body != null) streamer.SetTarget(body);
@@ -278,12 +323,12 @@ namespace PG
         {
             BodyDef target = null;
             double best = double.MaxValue;
-            Vector3 fwd = ship.Orientation * Vector3.forward;
+            Vector3 fwd = OnFoot ? character.LookDirection : ship.Orientation * Vector3.forward;
             foreach (var b in system.bodies)
             {
                 if (b.kind == BodyKind.Star) continue;
                 DVec3 poi = b.LogicalPos + new DVec3(b.poiLocalDirX, b.poiLocalDirY, b.poiLocalDirZ) * b.radius;
-                DVec3 to = poi - ship.LogicalPosition;
+                DVec3 to = poi - PlayerLogical;
                 double d = to.magnitude;
                 double align = DVec3.Dot(to / Math.Max(d, 1.0), DVec3.From(fwd));
                 bool onPlanet = ship.SoiBody == b && d < 6000.0;
@@ -383,6 +428,28 @@ namespace PG
             if (rig != null) rig.SnapImmediate();
             hud.ShowDebugRouteBanner(2.0f);
             ship.LandStatus = "DEBUG: 700 m OVER " + b.displayName;
+        }
+
+        /// <summary>
+        /// DEBUG: 3 km above a gas giant's haze on its sunward side, nose on its
+        /// centre, so a straight flight goes in one side and out the other.
+        /// Counted as a teleport.
+        /// </summary>
+        public void DebugJumpToGasGiant(string bodyId)
+        {
+            var b = system.Get(bodyId);
+            if (b == null || b.kind != BodyKind.GasGiant) return;
+            DVec3 dir = (system.Star.LogicalPos - b.LogicalPos).normalized;
+            DVec3 pos = b.LogicalPos + dir * (b.radius + b.atmosphereHeight + 3000.0);
+            Vector3 fwd = (-dir).ToVector3();
+            Vector3 up = Vector3.Cross(fwd, Vector3.right);
+            if (up.sqrMagnitude < 0.01f) up = Vector3.up;
+            ship.Orientation = Quaternion.LookRotation(fwd, up.normalized);
+            ship.TeleportLogical(pos, DVec3.zero);
+            streamer.SetTarget(b);
+            if (rig != null) rig.SnapImmediate();
+            hud.ShowDebugRouteBanner(2.0f);
+            ship.LandStatus = "DEBUG: 3 km OUTSIDE " + b.displayName.ToUpperInvariant();
         }
 
         public void DebugResetSave()

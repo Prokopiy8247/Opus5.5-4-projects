@@ -27,9 +27,11 @@ namespace PG
         public Material WaterMaterial;
         public Material AtmosphereMaterial;
         public Material CloudMaterial;
+        public Material GasGiantMaterial;
 
         readonly Dictionary<string, PlanetRuntime> runtimes = new Dictionary<string, PlanetRuntime>();
         readonly Dictionary<string, PlanetShells> shells = new Dictionary<string, PlanetShells>();
+        readonly Dictionary<string, GasGiantBody> gasGiants = new Dictionary<string, GasGiantBody>();
 
         /// <summary>Body whose sphere of influence currently owns the player.</summary>
         public BodyDef CurrentBody { get; private set; }
@@ -60,7 +62,8 @@ namespace PG
             foreach (var b in system.bodies)
             {
                 if (b.kind == BodyKind.Star) continue;   // the star is drawn by StarBody
-                BuildRuntime(b);
+                if (b.kind == BodyKind.GasGiant) BuildGasGiant(b);   // no ground to stream
+                else BuildRuntime(b);
             }
             if (FloatingOrigin.Instance != null) UpdateTransforms(FloatingOrigin.Instance.Origin);
         }
@@ -74,8 +77,10 @@ namespace PG
         public void RebuildAfterSaveLoad()
         {
             foreach (var kv in runtimes) if (kv.Value != null) Destroy(kv.Value.gameObject);
+            foreach (var kv in gasGiants) if (kv.Value != null) Destroy(kv.Value.gameObject);
             runtimes.Clear();
             shells.Clear();
+            gasGiants.Clear();
             Init();
         }
 
@@ -107,6 +112,33 @@ namespace PG
 
             runtimes[b.id] = pr;
             shells[b.id] = sh;
+        }
+
+        void BuildGasGiant(BodyDef b)
+        {
+            var go = new GameObject("GasGiant_" + b.displayName);
+            go.transform.SetParent(transform, false);
+            var gg = go.AddComponent<GasGiantBody>();
+            gg.Build(b, GasGiantMaterial);
+            gasGiants[b.id] = gg;
+        }
+
+        public GasGiantBody GasGiantOf(BodyDef b)
+        {
+            if (b == null) return null;
+            return gasGiants.TryGetValue(b.id, out var g) ? g : null;
+        }
+
+        /// <summary>The gas giant whose haze contains this point (null if none), with its 0..1 gas depth.</summary>
+        public BodyDef GasGiantAt(DVec3 logicalPos, out float depth)
+        {
+            depth = 0f;
+            foreach (var kv in gasGiants)
+            {
+                float d = GasGiantBody.GasDepth(kv.Value.Body, logicalPos);
+                if (d > 0f) { depth = d; return kv.Value.Body; }
+            }
+            return null;
         }
 
         // ------------------------------------------------------------ queries
@@ -200,6 +232,7 @@ namespace PG
                 kv.Value.UpdateRenderTransform(origin);
                 if (shells.TryGetValue(kv.Key, out var sh)) sh.Tick(origin);
             }
+            foreach (var kv in gasGiants) kv.Value.Tick(origin);
         }
 
         void FillColliders(PlanetRuntime pr, DVec3 playerLogical)

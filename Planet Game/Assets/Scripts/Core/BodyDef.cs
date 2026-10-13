@@ -6,6 +6,12 @@ namespace PG
     public enum BodyKind { Star, Rocky, Ocean, Ice, GasGiant }
 
     /// <summary>
+    /// A GasGiant has no ground at all: it is not landable, has no terrain
+    /// stream, and the ship flies straight through it (GasGiantBody draws it,
+    /// ShipController handles the buffeting inside). For a gas giant
+    /// <see cref="BodyDef.radius"/> is the cloud deck and atmosphereHeight the
+    /// haze above it; the colour fields are the band palette.
+    ///
     /// Authoring definition of one celestial body: where it is in the logical
     /// (double precision) system, how big it is, and the parameters that drive
     /// its single terrain function.
@@ -45,6 +51,14 @@ namespace PG
         public double terraceStep = 0.0;      // metres: mesa-style terracing of the uplands
         public double crackDensity = 0.0;     // 0..1: crevasse lines across ice sheets
         public double volcanicFraction = 0.0; // 0..1: share of the surface in dark volcanic fields
+
+        // ---- archipelago (islandSize 0 disables): a global ocean floor broken
+        //      only by small, separate islands. The default threshold gives
+        //      ~7% land in a few hundred islands, none of them continent-sized. ---
+        public double islandSize = 0.0;        // metres, island-field wavelength
+        public double islandThreshold = 0.26;  // field value at the waterline: higher = fewer, smaller islands
+        public double islandHeight = 40.0;     // metres above the sea at an island core (hills come on top)
+        public double oceanFloorDepth = 150.0; // metres below the sea, open ocean
 
         // ---- surface appearance ----
         public Color  lowColor  = new Color(0.42f, 0.30f, 0.20f);
@@ -120,6 +134,7 @@ namespace PG
         public const float  SpeedApproachCap = 900f;    // m/s, cap a few km above a surface
         public const float  SpeedEntryCap    = 420f;    // m/s, cap once the atmosphere is entered
         public const float  SpeedLandingMax  = 14f;     // m/s, below which touchdown is a landing
+        public const float  SpeedGasMax      = 260f;    // m/s, cap at and below a gas giant's cloud deck
 
         public const float  AccelAtmo   = 60f;
         public const float  AccelOrbit  = 110f;
@@ -128,6 +143,15 @@ namespace PG
         public const float  PulseChargeTime = 1.2f;     // seconds to spin up the pulse drive
         public const float  PulseAlignCone  = 20f;      // degrees: nose must be this close to the target
         public const float  PulseDropCone   = 55f;      // degrees: drive drops out beyond this
+
+        // Star hazard, metres above Helion's photosphere. Fixed margins rather
+        // than multiples of the radius, so the planet-to-planet lines (~15 km
+        // from the star's centre) stay clear of them whatever the star's size.
+        // A pulse engaged on a planet's sunward side can still aim as close as
+        // ~11.5 km; the drive then skirts the pulse margin instead of crossing it.
+        public const double StarPulseMargin   = 3000.0; // pulse drive skirts round this
+        public const double StarHeatMargin    = 2000.0; // hull heating + warning inside this, pulse drops out
+        public const double StarContactMargin = 280.0;  // touching this destroys the ship
 
         // Terrain streaming ----------------------------------------------------
         public const int    PatchRes        = 20;       // quads per patch edge
@@ -141,6 +165,8 @@ namespace PG
         public const int    ColliderBuildsPerFrame = 4;
 
         public const float  CrashSpeed      = 26f;      // m/s vertical impact that damages
+        public const float  ExplodeSpeed    = 60f;      // m/s at ground contact that destroys the ship
+        public const float  RespawnDelay    = 4f;       // seconds between the explosion and the new ship
         public const float  MaxLandingSlope = 24f;      // degrees
 
         public const string SaveFileName = "pg_save.json";

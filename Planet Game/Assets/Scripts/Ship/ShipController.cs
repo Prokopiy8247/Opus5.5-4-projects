@@ -24,6 +24,11 @@ namespace PG
     /// the velocity vector is continuously turned toward the nose, W/S set a
     /// target forward speed, and the thrusters hold altitude against gravity.
     /// With assist OFF the ship is inertial: thrust only, gravity applies.
+    ///
+    /// The ship can be lost: touching the ground faster than
+    /// <see cref="PGConst.ExplodeSpeed"/>, touching the star, or a hull worn
+    /// down to 0% blows it up. The wreck stays where it is (no motion, no
+    /// controls) until GameManager hands out a new ship.
     /// </summary>
     [RequireComponent(typeof(Rigidbody))]
     [DefaultExecutionOrder(-20)]
@@ -85,6 +90,13 @@ namespace PG
         public bool  Landed => Mode == FlightMode.Landed;
         public bool  Assisting => LandStatus == "ALIGNING" || LandStatus == "DESCENDING";
         public bool  MotorDisabled { get; set; }
+        /// <summary>True from the explosion until the respawn.</summary>
+        public bool  Destroyed { get; private set; }
+        public string DestroyedReason { get; private set; } = "";
+        public float DestroyedSeconds { get; private set; }
+        public bool  DestroyedByStar { get; private set; }
+        /// <summary>1 at the moment of the explosion, decaying to 0 (drives the camera shake).</summary>
+        public float Blast { get; private set; }
         public double CurrentGravity { get; private set; }
         public double AltitudeAGL { get; private set; } = 1e9;
         public double AltitudeDatum { get; private set; } = 1e9;
@@ -94,6 +106,12 @@ namespace PG
         public float TimeToImpact { get; private set; } = float.PositiveInfinity;
         public bool  CollisionWarning { get; private set; }
         public bool  StarWarning { get; private set; }
+        /// <summary>Gas giant whose haze the ship is inside, null outside every one.</summary>
+        public BodyDef GasBody { get; private set; }
+        /// <summary>0 at the gas giant's haze top, 1 at and below its cloud deck.</summary>
+        public float GasDepth { get; private set; }
+        /// <summary>0..1 buffeting inside a gas giant (also drives the camera shake).</summary>
+        public float Buffet { get; private set; }
         public float GroundClearance { get; private set; } = PGConst.ShipGroundClearance;
         public float GearSpan { get; private set; } = PGConst.ShipGearSpan;
 
@@ -105,10 +123,11 @@ namespace PG
 
         public event Action Touchdown;
         public event Action LiftOff;
+        public event Action Exploded;
 
         Rigidbody rb;
         DVec3 landingSite = new DVec3(0, 1, 0);
-        float hullRecoverTimer;
+        Renderer[] wreckHidden;
 
         // Render interpolation between fixed steps.
         DVec3 prevLogical, currLogical;
@@ -217,6 +236,8 @@ namespace PG
 
         void Place(DVec3 pos, DVec3 vel, Quaternion rot)
         {
+            // The ship never leaves its pilot behind on a load or a debug jump.
+            if (PlayerCharacter.Instance != null) PlayerCharacter.Instance.BoardImmediate();
             LogicalPosition = pos;
             LogicalVelocity = vel;
             Orientation = rot;
@@ -225,6 +246,7 @@ namespace PG
             prevRot = currRot = rot;
             Mode = FlightMode.Space;
             PulseSpooling = false; PulseCharge = 0f;
+            Revive();
             var fo = FloatingOrigin.Instance;
             if (fo != null) fo.SetOriginHard(pos);
             if (streamer != null) SoiBody = streamer.system.DominantBody(pos);
@@ -250,6 +272,15 @@ namespace PG
             bool inAtmo = SoiBody.landable && atmoH > 1.0 && AltitudeDatum < atmoH;
             float t = atmoH > 1.0 ? Mathf.Clamp01((float)(1.0 - AltitudeDatum / atmoH)) : 0f;
             AirDensity = t * t * (3f - 2f * t);
+            GasBody = streamer.GasGiantAt(LogicalPosition, out float gasDepth);
+            GasDepth = gasDepth;
+
+            if (Destroyed)
+            {
+                HoldWreck(dt);
+                EndStep(prevPos, dt, up);
+                return;
+            }
 
             if (Mode == FlightMode.Landed)
             {
@@ -284,6 +315,8 @@ namespace PG
             if (flightAssist && !MotorDisabled) ApplyAssist(dt, up, inAtmo);
             ApplyGravity(dt, up, radius, atmoH);
             ClampSpeed(inAtmo);
+            GasGiantFlight(dt);
+            PulseSkirtStar();
 
             LogicalPosition += LogicalVelocity * dt;
 
@@ -322,6 +355,12 @@ namespace PG
 
         void UpdateModeLabel()
         {
+            if (Destroyed) { ModeLabel = "DESTROYED"; return; }
+            if (GasBody != null && Mode != FlightMode.Pulse)
+            {
+                ModeLabel = GasDepth >= 1f ? "INSIDE GAS GIANT" : "GAS GIANT HAZE";
+                return;
+            }
             switch (Mode)
             {
                 case FlightMode.Pulse: ModeLabel = "PULSE"; break;
@@ -506,6 +545,44 @@ namespace PG
 
         static double Lerp(double a, double b, double t) => a + (b - a) * PGNoise.Clamp01(t);
 
+        /// <summary>
+        /// Inside a gas giant: the thick gas bleeds speed toward a low cap and
+        /// buffets the ship - smooth random kicks to attitude and course that
+        /// grow with depth and speed. There is no ground and no damage, so the
+        /// ship can always fly out the other side.
+        /// </summary>
+        void GasGiantFlight(float dt)
+        {
+            if (GasBody == null)
+            {
+                Buffet = Mathf.Lerp(Buffet, 0f, 1f - Mathf.Exp(-dt * 3f));
+                return;
+            }
+
+            double speed = LogicalVelocity.magnitude;
+            double cap = Lerp(PGConst.SpeedOrbitMax * 1.7, PGConst.SpeedGasMax, GasDepth);
+            if (speed > cap)
+            {
+                double over = speed - cap;
+                // The constant term outweighs full boosted thrust (~180 m/s²),
+                // so the engines can never push past the cap.
+                double reduce = Math.Min(over, (over * 3.0 + 220.0) * dt);
+                LogicalVelocity -= LogicalVelocity / speed * reduce;
+                speed -= reduce;
+            }
+
+            float want = GasDepth * (0.3f + 0.7f * Mathf.Clamp01((float)speed / 180f));
+            Buffet = Mathf.Lerp(Buffet, want, 1f - Mathf.Exp(-dt * 3f));
+            if (MotorDisabled || Buffet < 0.01f) return;
+
+            float tn = Time.time * 1.7f;
+            Vector3 kick = new Vector3(Mathf.PerlinNoise(tn, 3.1f) - 0.5f,
+                                       Mathf.PerlinNoise(7.3f, tn) - 0.5f,
+                                       Mathf.PerlinNoise(tn, 11.9f) - 0.5f);
+            AngularVelocity += kick * (Buffet * 90f * dt);
+            LogicalVelocity += DVec3.From(Orientation * new Vector3(kick.x, kick.y, 0f)) * (Buffet * 14.0 * dt);
+        }
+
         // --------------------------------------------------------- pulse drive
 
         BodyDef PulseTarget => streamer != null ? streamer.TargetBody : null;
@@ -565,8 +642,35 @@ namespace PG
             if (AngleToTarget() > PGConst.PulseDropCone) { DropPulse("PULSE DROPPED - OFF COURSE"); return; }
             if (DistanceToTargetSurface() < tb.atmosphereHeight + 1600.0) { DropPulse("ARRIVING AT " + tb.displayName.ToUpperInvariant()); return; }
             if (inAtmo || AltitudeAGL < SoiBody.atmosphereHeight + 300.0) { DropPulse("PULSE DROPPED - PLANET PROXIMITY"); return; }
+            if (GasBody != null) { DropPulse("PULSE DROPPED - " + GasBody.displayName.ToUpperInvariant() + " ATMOSPHERE"); return; }
             var star = streamer.system.Star;
-            if (star != null && (LogicalPosition - star.LogicalPos).magnitude < star.radius * 2.2) { DropPulse("PULSE DROPPED - STAR PROXIMITY"); return; }
+            if (star != null && (LogicalPosition - star.LogicalPos).magnitude < star.radius + PGConst.StarHeatMargin) { DropPulse("PULSE DROPPED - STAR PROXIMITY"); return; }
+        }
+
+        /// <summary>
+        /// A pulse course that cuts through the star's keep-out sphere is bent
+        /// round the outside of it: the closing speed is limited in proportion
+        /// to the remaining gap, so the ship eases onto the sphere, slides along
+        /// it under its own thrust and leaves where the line to the target
+        /// comes clear. Continuous flight - only the velocity is touched.
+        /// </summary>
+        void PulseSkirtStar()
+        {
+            if (Mode != FlightMode.Pulse) return;
+            var star = streamer.system.Star;
+            if (star == null) return;
+            DVec3 d = LogicalPosition - star.LogicalPos;
+            double dist = d.magnitude;
+            DVec3 n = d / dist;
+            double closing = -DVec3.Dot(LogicalVelocity, n);
+            double maxClosing = Math.Max(0.0, (dist - star.radius - PGConst.StarPulseMargin) * 2.0);
+            string skirting = "PULSE - SKIRTING " + star.displayName.ToUpperInvariant();
+            if (closing > maxClosing)
+            {
+                LogicalVelocity += n * (closing - maxClosing);
+                PulseStatus = skirting;
+            }
+            else if (PulseStatus == skirting) PulseStatus = "PULSE ENGAGED -> " + PulseTarget.displayName;
         }
 
         void TryEngagePulse(bool inAtmo)
@@ -574,6 +678,7 @@ namespace PG
             var tb = PulseTarget;
             if (MotorDisabled) { PulseStatus = "PULSE UNAVAILABLE - ENGINES OFFLINE"; return; }
             if (tb == null) { PulseStatus = "PULSE NEEDS A TARGET (TAB)"; return; }
+            if (GasBody != null) { PulseStatus = "LEAVE " + GasBody.displayName.ToUpperInvariant() + " TO PULSE"; return; }
             if (inAtmo || AltitudeAGL < SoiBody.atmosphereHeight + 300.0)
             {
                 PulseStatus = "CLIMB ABOVE " + ((SoiBody.atmosphereHeight + 300.0) / 1000.0).ToString("F1") + " km TO PULSE";
@@ -608,6 +713,16 @@ namespace PG
             LogicalPosition += up * penetration;
             AltitudeAGL = GroundClearance;
 
+            // Any touch at speed is fatal - a dive and a hillside met in level
+            // flight alike, so this is the whole speed, not its vertical part.
+            if (Speed > PGConst.ExplodeSpeed)
+            {
+                LastImpactSpeed = Speed;
+                LastImpactNote = "CRASHED AT " + Speed.ToString("F0") + " m/s";
+                Explode("HIT " + SoiBody.displayName.ToUpperInvariant() + " AT " + Speed.ToString("F0") + " m/s", false);
+                return;
+            }
+
             double vertical = DVec3.Dot(LogicalVelocity, up);
             if (vertical < 0.0)
             {
@@ -617,6 +732,11 @@ namespace PG
                     LastImpactSpeed = (float)impact;
                     LastImpactNote = "HARD IMPACT " + impact.ToString("F0") + " m/s";
                     HullIntegrity = Mathf.Clamp01(HullIntegrity - (float)((impact - PGConst.CrashSpeed) / 80.0 + 0.05));
+                    if (HullIntegrity <= 0.001f)
+                    {
+                        Explode("HULL BROKE UP ON " + SoiBody.displayName.ToUpperInvariant(), false);
+                        return;
+                    }
                 }
                 else if (impact > 3.0)
                 {
@@ -643,18 +763,20 @@ namespace PG
             if (star == null) return;
             DVec3 d = LogicalPosition - star.LogicalPos;
             double dist = d.magnitude;
-            if (dist < star.radius * 1.8)
-            {
-                StarWarning = true;
-                HullIntegrity = Mathf.Clamp01(HullIntegrity - dt * 0.04f);
-            }
-            double minR = star.radius * 1.08;
+            double minR = star.radius + PGConst.StarContactMargin;
             if (dist < minR)
             {
-                DVec3 n = d / dist;
-                LogicalPosition = star.LogicalPos + n * minR;
-                double inward = DVec3.Dot(LogicalVelocity, n);
-                if (inward < 0) LogicalVelocity -= n * inward;
+                Explode("BURNED UP IN " + star.displayName.ToUpperInvariant(), true);
+                return;
+            }
+            if (dist < star.radius + PGConst.StarHeatMargin)
+            {
+                // The hull heats faster the deeper the ship goes: a slow burn at
+                // the edge of the zone, seconds from the photosphere.
+                StarWarning = true;
+                float depth = (float)PGNoise.Clamp01(1.0 - (dist - minR) / (PGConst.StarHeatMargin - PGConst.StarContactMargin));
+                HullIntegrity = Mathf.Clamp01(HullIntegrity - dt * Mathf.Lerp(0.04f, 0.6f, depth * depth));
+                if (HullIntegrity <= 0.001f) Explode("HULL MELTED NEAR " + star.displayName.ToUpperInvariant(), true);
             }
         }
 
@@ -670,21 +792,75 @@ namespace PG
 
         void UpdateHull(float dt)
         {
-            // Recovery after a crash, without relocating the ship: the engines
-            // cut out at 0% hull and an emergency repair restarts them in place.
-            if (HullIntegrity <= 0.001f)
-            {
-                MotorDisabled = true;
-                hullRecoverTimer += dt;
-                LandStatus = "HULL CRITICAL - EMERGENCY REPAIR " + Mathf.CeilToInt(4f - hullRecoverTimer) + "s";
-                if (hullRecoverTimer > 4f)
-                {
-                    HullIntegrity = 0.35f;
-                    MotorDisabled = false;
-                    hullRecoverTimer = 0f;
-                    LandStatus = "EMERGENCY REPAIR DONE - HULL 35%";
-                }
-            }
+            if (!Destroyed && HullIntegrity <= 0.001f) Explode("HULL FAILURE", false);
+        }
+
+        // -------------------------------------------------------- destruction
+
+        void Explode(string reason, bool byStar)
+        {
+            if (Destroyed) return;
+            Destroyed = true;
+            DestroyedByStar = byStar;
+            DestroyedReason = reason;
+            DestroyedSeconds = 0f;
+            Blast = 1f;
+            HullIntegrity = 0f;
+            DropPulse("");
+            PulseCharge = 0f;
+            LandStatus = "SHIP DESTROYED - " + reason;
+            LogicalVelocity = DVec3.zero;
+            AngularVelocity = Vector3.zero;
+            ThrustLoad = 0f;
+            Buffet = 0f;
+            StarWarning = false;
+
+            // Only the hull disappears; the anchors stay, so the camera keeps
+            // looking at the spot.
+            var hidden = new System.Collections.Generic.List<Renderer>();
+            foreach (var r in GetComponentsInChildren<Renderer>())
+                if (r.enabled && !(r is ParticleSystemRenderer)) { r.enabled = false; hidden.Add(r); }
+            wreckHidden = hidden.ToArray();
+            ShipExplosion.Play(this);
+            Debug.Log("[PG] ship destroyed: " + reason);
+            Exploded?.Invoke();
+        }
+
+        /// <summary>The wreck: no motion, no controls, until the respawn.</summary>
+        void HoldWreck(float dt)
+        {
+            DestroyedSeconds += dt;
+            Blast = Mathf.Exp(-DestroyedSeconds * 2.2f);
+            LogicalVelocity = DVec3.zero;
+            AngularVelocity = Vector3.zero;
+            ThrustLoad = 0f;
+            pulseToggleRequested = landingRequested = takeoffRequested = false;
+        }
+
+        /// <summary>Every placement (respawn, load, debug relocation) hands back a whole ship.</summary>
+        void Revive()
+        {
+            if (!Destroyed) return;
+            Destroyed = false;
+            DestroyedByStar = false;
+            DestroyedReason = "";
+            DestroyedSeconds = 0f;
+            Blast = 0f;
+            HullIntegrity = 1f;
+            MotorDisabled = false;
+            LandStatus = "";
+            if (wreckHidden != null)
+                foreach (var r in wreckHidden) if (r != null) r.enabled = true;
+            wreckHidden = null;
+        }
+
+        /// <summary>
+        /// A new ship after the old one was lost. Not travel and not a debug
+        /// tool, so it is not counted as a teleport.
+        /// </summary>
+        public void Respawn(DVec3 pos, Quaternion rot)
+        {
+            Place(pos, DVec3.zero, rot);
         }
 
         // ------------------------------------------------------------ landing
@@ -755,7 +931,7 @@ namespace PG
         public void EnterLanded()
         {
             Mode = FlightMode.Landed;
-            LandStatus = "LANDED - R or K to take off";
+            LandStatus = "LANDED - E to step out, R or K to take off";
             LogicalVelocity = DVec3.zero;
             AngularVelocity = Vector3.zero;
             inThrottle = 0f;
@@ -828,7 +1004,7 @@ namespace PG
 
         void UpdateEffects()
         {
-            float load = MotorDisabled ? 0.1f : ThrustLoad;
+            float load = Destroyed ? 0f : MotorDisabled ? 0.1f : ThrustLoad;
             float boostK = boost ? 1.35f : 1f;
             if (thrusterParticles != null)
             {
@@ -836,7 +1012,7 @@ namespace PG
                 {
                     if (ps == null) continue;
                     var em = ps.emission;
-                    em.rateOverTime = Mode == FlightMode.Landed ? 0f : Mathf.Lerp(8f, 150f, load) * boostK;
+                    em.rateOverTime = Mode == FlightMode.Landed || Destroyed ? 0f : Mathf.Lerp(8f, 150f, load) * boostK;
                     var main = ps.main;
                     main.startSpeed = Mathf.Lerp(8f, 46f, load) * boostK;
                     main.startSize = Mathf.Lerp(0.7f, 1.6f, load);

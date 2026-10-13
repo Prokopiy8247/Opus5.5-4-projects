@@ -112,6 +112,96 @@ namespace PG.Tests
             Assert.Less(worst, 1e-3);
         }
 
+        // ------------------------------------------------------------ archipelago
+
+        /// <summary>
+        /// Pelagia is ocean everywhere except small, separate islands: a few
+        /// percent of land, in hundreds of islands, none continent-sized - and
+        /// still with dry, flat ground for the debug landing spots.
+        /// </summary>
+        [Test]
+        public void Pelagia_IsOceanWithManySmallSeparateIslands_AndLandableDryGround()
+        {
+            var def = PGTestUtil.Body("pelagia");
+            var perm = PGNoise.BuildPerm(def.seed);
+            const int N = 96;
+            var land = new bool[6, N, N];
+            int dry = 0;
+            for (int f = 0; f < 6; f++)
+                for (int j = 0; j < N; j++)
+                    for (int i = 0; i < N; i++)
+                    {
+                        DVec3 d = CubeSphere.FacePoint(f, (i + 0.5) / N, (j + 0.5) / N);
+                        if (TerrainFunc.Elevation(def, perm, d) > def.seaLevel) { land[f, i, j] = true; dry++; }
+                    }
+            double fraction = dry / (6.0 * N * N);
+
+            // Islands = 4-connected land cells (per cube face; enough for statistics).
+            var seen = new bool[6, N, N];
+            var sizes = new List<int>();
+            var stack = new Stack<(int, int, int)>();
+            for (int f = 0; f < 6; f++)
+                for (int j = 0; j < N; j++)
+                    for (int i = 0; i < N; i++)
+                    {
+                        if (!land[f, i, j] || seen[f, i, j]) continue;
+                        int count = 0;
+                        seen[f, i, j] = true; stack.Push((f, i, j));
+                        while (stack.Count > 0)
+                        {
+                            var (cf, ci, cj) = stack.Pop(); count++;
+                            foreach (var (di, dj) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
+                            {
+                                int ni = ci + di, nj = cj + dj;
+                                if (ni < 0 || nj < 0 || ni >= N || nj >= N || !land[cf, ni, nj] || seen[cf, ni, nj]) continue;
+                                seen[cf, ni, nj] = true; stack.Push((cf, ni, nj));
+                            }
+                        }
+                        sizes.Add(count);
+                    }
+            sizes.Sort();
+            double cell = Math.PI * 0.5 * def.radius / N;
+            double largest = sizes.Count > 0 ? 2.0 * Math.Sqrt(sizes[sizes.Count - 1] * cell * cell / Math.PI) : 0.0;
+            Debug.Log($"[TEST] Pelagia: land {fraction:P1}, {sizes.Count} islands, largest ~{largest:F0} m across");
+            Assert.That(fraction, Is.InRange(0.03, 0.15), "mostly ocean, with some land");
+            Assert.Greater(sizes.Count, 100, "many separate islands");
+            Assert.Less(largest, 1500.0, "no island grows into a continent");
+
+            // How much of the dry ground can actually take a landing.
+            int dryCells = 0, flatCells = 0;
+            for (int f = 0; f < 6; f++)
+                for (int j = 0; j < N; j++)
+                    for (int i = 0; i < N; i++)
+                    {
+                        if (!land[f, i, j]) continue;
+                        DVec3 d = CubeSphere.FacePoint(f, (i + 0.5) / N, (j + 0.5) / N).normalized;
+                        if (TerrainFunc.Elevation(def, perm, d) < def.seaLevel + 8.0) continue;
+                        dryCells++;
+                        double s = Math.Acos(Math.Min(1.0, DVec3.Dot(TerrainFunc.SurfaceNormal(def, perm, d, 6.0), d))) * 180.0 / Math.PI;
+                        if (s < PGConst.MaxLandingSlope) flatCells++;
+                    }
+            double landable = flatCells / (double)Math.Max(1, dryCells);
+            Debug.Log($"[TEST] Pelagia: {landable:P0} of the dry ground is under {PGConst.MaxLandingSlope:F0} deg");
+            Assert.Greater(landable, 0.2, "the islands are not all cliffs");
+
+            DVec3[] prefer =
+            {
+                new DVec3(0.85, 0.35, 0.38).normalized,
+                new DVec3(-0.62, 0.60, 0.50).normalized,
+                new DVec3(0.22, -0.48, -0.85).normalized,
+                new DVec3(-0.30, -0.72, 0.62).normalized,
+            };
+            foreach (var p in prefer)
+            {
+                DVec3 spot = TerrainFunc.FindFlatSpotOnLand(def, perm, p, def.radius * 0.10, 200);
+                double h = TerrainFunc.Elevation(def, perm, spot);
+                double slope = Math.Acos(Math.Min(1.0, DVec3.Dot(TerrainFunc.SurfaceNormal(def, perm, spot, 6.0), spot))) * 180.0 / Math.PI;
+                Debug.Log($"[TEST] Pelagia landing spot: {h:F0} m above the datum, slope {slope:F1} deg, {TerrainFunc.AngleBetween(p, spot) * def.radius:F0} m from the preferred point");
+                Assert.Greater(h, def.seaLevel + 8.0, "landing spot must be dry");
+                Assert.Less(slope, PGConst.MaxLandingSlope, "landing spot must be flat enough");
+            }
+        }
+
         // ---------------------------------------------------------------- handoff
 
         static DVec3 Above(BodyDef d, QuadNode n, double alt)
@@ -132,9 +222,14 @@ namespace PG.Tests
             var root = pr.roots[0];
             DVec3 near = Above(def, root, 300.0);
             pr.Tick(near, new DVec3(0, 0, 1), 0f, false);
-            Assert.AreEqual(NodeState.Splitting, root.state);
-            Assert.IsTrue(root.Drawn, "parent keeps drawing while its children build");
-            foreach (var c in root.children) Assert.IsFalse(c.Drawn, "children hidden until all four are ready");
+            // A warm thread pool can finish all four builds inside this very Tick;
+            // then the swap has already happened and there is no in-between to check.
+            if (root.state != NodeState.Split)
+            {
+                Assert.AreEqual(NodeState.Splitting, root.state);
+                Assert.IsTrue(root.Drawn, "parent keeps drawing while its children build");
+                foreach (var c in root.children) Assert.IsFalse(c.Drawn, "children hidden until all four are ready");
+            }
 
             int frames = 0;
             while (root.state == NodeState.Splitting && frames++ < 600)
@@ -167,7 +262,9 @@ namespace PG.Tests
             DVec3 near = Above(def, root, 300.0);
             DVec3 far = def.LogicalPos + new DVec3(0, 1, 0) * 1e6;
             pr.Tick(near, new DVec3(0, 0, 1), 0f, false);
-            Assert.AreEqual(NodeState.Splitting, root.state);
+            // A warm thread pool can finish all four builds inside this very Tick; the
+            // child is then already drawn, and a late job for it is just as stale.
+            Assert.That(root.state, Is.EqualTo(NodeState.Splitting).Or.EqualTo(NodeState.Split));
             var child = root.children[0];
 
             // A finished job for the child, captured with its current generation...

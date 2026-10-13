@@ -141,7 +141,7 @@ namespace PG
                 cells[c.key] = c;
             }
 
-            DVec3 up = (ship.LogicalPosition - body.LogicalPos).normalized;
+            DVec3 up = (PlayerCharacter.FocusOf(ship) - body.LogicalPos).normalized;
             if (!haveCentre || (up - lastCentre).magnitude * body.radius > 30.0)
             {
                 lastCentre = up; haveCentre = true;
@@ -343,6 +343,7 @@ namespace PG
             for (int k = 0; k < KindCount; k++) batch[k].Clear();
 
             DVec3 shipPos = ship.LogicalPosition;
+            DVec3 focus = PlayerCharacter.FocusOf(ship);   // the field follows the pilot on foot
             bool keepClear = ship.AltitudeAGL < 40.0;
             double r2max = (double)radius * radius;
             int total = 0;
@@ -358,10 +359,10 @@ namespace PG
                     for (int i = 0; i < list.Count; i++)
                     {
                         var inst = list[i];
-                        DVec3 rel = inst.pos - shipPos;
+                        DVec3 rel = inst.pos - focus;
                         double d2 = rel.sqrMagnitude;
                         if (d2 > reach2) continue;
-                        if (keepClear && d2 < 14.0 * 14.0) continue;            // never inside the parked ship
+                        if (keepClear && (inst.pos - shipPos).sqrMagnitude < 14.0 * 14.0) continue;            // never inside the parked ship
                         double d = Math.Sqrt(d2), rr = radius * kindReach;
                         float grow = (float)PGNoise.SmoothStep(rr, rr * 0.82, d);
                         float s = inst.scale * grow;
